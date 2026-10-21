@@ -57,3 +57,14 @@ apps/mobile/android/build/
 # Local data & memory
 .openbot_data/
 **/.openbot_data/
+
+# Compiled TypeScript twins must never be committed next to sources
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map
+services/*/src/**/*.js
+services/*/src/**/*.js.map
+apps/*/src/**/*.js.map
+
+# Downloaded local model weights
+.openbot_models/
+**/.openbot_models/
