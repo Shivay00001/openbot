@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">OpenBot Phone Agent</string>
+    <string name="accessibility_service_name">OpenBot Autonomous Phone Controller</string>
+    <string name="accessibility_service_description">Enables OpenBot to interact autonomously with screen elements, fill forms, execute workflows, and perform taps and gestures on your behalf.</string>
+</resources>

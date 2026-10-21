@@ -1,0 +1,336 @@
+// ─────────────────────────────────────────────────────────────
+// OpenBot — Database Schema (Prisma)
+// PostgreSQL with full-text search and JSON columns
+// ─────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── User & Authentication ──────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  passwordHash  String?
+  avatarUrl     String?
+  role          UserRole  @default(USER)
+  isActive      Boolean   @default(true)
+  emailVerified Boolean   @default(false)
+
+  // Settings stored as JSON
+  settings      Json      @default("{}")
+
+  // OAuth connections
+  oauthAccounts OAuthAccount[]
+
+  // Relations
+  apiKeys       ApiKey[]
+  conversations Conversation[]
+  skills        Skill[]
+  memories      Memory[]
+  permissions   Permission[]
+  billing       BillingAccount?
+  sessions      Session[]
+  taskJobs      TaskJob[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([email])
+  @@map("users")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  DEVELOPER
+}
+
+model OAuthAccount {
+  id           String   @id @default(cuid())
+  userId       String
+  provider     String   // google, github, etc.
+  providerId   String   // provider-specific user ID
+  accessToken  String?
+  refreshToken String?
+  expiresAt    DateTime?
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([provider, providerId])
+  @@map("oauth_accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  token        String   @unique
+  refreshToken String?  @unique
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  isRevoked    Boolean  @default(false)
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime @default(now())
+
+  @@index([token])
+  @@index([userId])
+  @@map("sessions")
+}
+
+// ─── BYOK API Key Vault ─────────────────────────────────────
+
+model ApiKey {
+  id           String       @id @default(cuid())
+  userId       String
+  provider     String       // openai, anthropic, google, xai, deepseek, mistral, ollama, custom
+  label        String?      // user-friendly label
+  encryptedKey String       // AES-256 encrypted API key
+  baseUrl      String?      // custom endpoint URL
+  isActive     Boolean      @default(true)
+  lastUsedAt   DateTime?
+  usageCount   Int          @default(0)
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([userId, provider, label])
+  @@index([userId])
+  @@map("api_keys")
+}
+
+// ─── Conversations & Messages ───────────────────────────────
+
+model Conversation {
+  id           String             @id @default(cuid())
+  userId       String
+  title        String             @default("New Conversation")
+  mode         ConversationMode   @default(CHAT)
+  modelConfig  Json               @default("{}")
+  settings     Json               @default("{}")
+  isPinned     Boolean            @default(false)
+  isArchived   Boolean            @default(false)
+
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages     Message[]
+  tasks        TaskJob[]
+
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([userId])
+  @@index([userId, updatedAt])
+  @@map("conversations")
+}
+
+enum ConversationMode {
+  CHAT
+  AGENT
+  PHONE
+  VOICE
+  BROWSER
+  DESKTOP
+}
+
+model Message {
+  id              String    @id @default(cuid())
+  conversationId  String
+  role            String    // user, assistant, system, tool
+  content         String
+  metadata        Json?     // thinking traces, usage stats, tool metadata
+  toolCalls       Json?     // [{id, name, arguments}]
+  toolCallId      String?   // for tool response messages
+  tokenCount      Int?
+  costUsd         Float?
+
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime    @default(now())
+
+  @@index([conversationId])
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+// ─── Skills & Routines ──────────────────────────────────────
+
+model Skill {
+  id           String          @id @default(cuid())
+  userId       String
+  name         String
+  description  String          @default("")
+  definition   Json            // SkillDefinition (triggers, steps, schema)
+  isPublic     Boolean         @default(false)
+  tags         String[]        @default([])
+  usageCount   Int             @default(0)
+  rating       Float?
+
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  executions   SkillExecution[]
+
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([isPublic])
+  @@map("skills")
+}
+
+model SkillExecution {
+  id        String   @id @default(cuid())
+  skillId   String
+  status    String   // pending, running, completed, failed
+  input     Json?
+  output    Json?
+  error     String?
+  duration  Int?     // milliseconds
+
+  skill     Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([skillId])
+  @@map("skill_executions")
+}
+
+// ─── Memory System ──────────────────────────────────────────
+
+model Memory {
+  id         String         @id @default(cuid())
+  userId     String
+  content    String
+  category   MemoryCategory @default(FACT)
+  importance Float          @default(0.5)
+  source     String         @default("conversation")
+  embedding  Float[]        @default([])    // vector embedding for similarity search
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime       @default(now())
+
+  @@index([userId])
+  @@index([userId, category])
+  @@map("memories")
+}
+
+enum MemoryCategory {
+  FACT
+  PREFERENCE
+  INSTRUCTION
+  CONTEXT
+  TASK_OUTCOME
+  SKILL_LEARNED
+}
+
+// ─── Permissions ────────────────────────────────────────────
+
+model Permission {
+  id        String   @id @default(cuid())
+  userId    String
+  toolName  String
+  action    String   // allow_once, always_allow, deny, ask
+  scope     String?
+  expiresAt DateTime?
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, toolName, scope])
+  @@index([userId])
+  @@map("permissions")
+}
+
+// ─── Billing & Usage ────────────────────────────────────────
+
+model BillingAccount {
+  id              String        @id @default(cuid())
+  userId          String        @unique
+  plan            BillingPlan   @default(FREE)
+  stripeCustomerId String?
+  stripeSubId     String?
+
+  // Quota tracking
+  monthlyTokenLimit BigInt      @default(1000000)  // 1M tokens for free tier
+  tokensUsedThisMonth BigInt    @default(0)
+  quotaResetAt    DateTime      @default(now())
+
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  usageRecords    UsageRecord[]
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@map("billing_accounts")
+}
+
+enum BillingPlan {
+  FREE
+  PRO
+  TEAM
+  ENTERPRISE
+}
+
+model UsageRecord {
+  id              String   @id @default(cuid())
+  billingAccountId String
+  provider        String   // openai, anthropic, local, etc.
+  model           String
+  promptTokens    Int
+  completionTokens Int
+  totalTokens     Int
+  costUsd         Float
+  conversationId  String?
+
+  billingAccount  BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime @default(now())
+
+  @@index([billingAccountId])
+  @@index([billingAccountId, createdAt])
+  @@map("usage_records")
+}
+
+// ─── Background Task Queue ──────────────────────────────────
+
+model TaskJob {
+  id              String   @id @default(cuid())
+  userId          String
+  conversationId  String?
+  type            String   // agent_task, voice_call, skill_execution, scheduled_job
+  status          String   @default("pending")  // pending, running, completed, failed, cancelled
+  priority        Int      @default(0)
+  payload         Json     // task-specific data
+  result          Json?
+  error           String?
+  attempts        Int      @default(0)
+  maxAttempts     Int      @default(3)
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation    Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([status])
+  @@index([userId])
+  @@index([type, status])
+  @@map("task_jobs")
+}

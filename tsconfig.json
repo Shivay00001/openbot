@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@openbot/core": ["./packages/core/src"],
+      "@openbot/core/*": ["./packages/core/src/*"],
+      "@openbot/database": ["./packages/database/src"],
+      "@openbot/database/*": ["./packages/database/src/*"],
+      "@openbot/shared-types": ["./packages/shared-types/src"],
+      "@openbot/shared-types/*": ["./packages/shared-types/src/*"]
+    }
+  },
+  "exclude": ["node_modules", "dist", ".next", ".turbo"]
+}

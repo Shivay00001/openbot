@@ -1,0 +1,33 @@
+{
+  "name": "openbot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Universal AI Agent Platform — Open Source, Model Agnostic, Cross-Platform",
+  "license": "MIT",
+  "author": "OpenBot Contributors",
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "services/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:web": "turbo run dev --filter=@openbot/web",
+    "dev:api": "turbo run dev --filter=@openbot/api-gateway",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "db:migrate": "turbo run db:migrate --filter=@openbot/api-gateway",
+    "db:push": "turbo run db:push --filter=@openbot/api-gateway",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "@types/yargs": "^17.0.35",
+    "turbo": "^2.4.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "npm@10.0.0"
+}

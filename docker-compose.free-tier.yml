@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # ─── 1. OpenBot Web & Agent Engine (Next.js 15) ─────────────────
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: openbot-web
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://openbot_user:free_tier_secret_password@postgres:5432/openbot?schema=public
+      - REDIS_URL=redis://redis:6379
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # ─── 2. Free Database (PostgreSQL 16) ─────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: openbot-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: openbot_user
+      POSTGRES_PASSWORD: free_tier_secret_password
+      POSTGRES_DB: openbot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openbot_user -d openbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── 3. Free Cache / Queue (Redis 7) ──────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: openbot-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # ─── 4. On-Device / Cloud Free LLM Engine (Ollama) ────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: openbot-ollama
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_models:

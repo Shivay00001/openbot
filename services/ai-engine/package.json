@@ -1,0 +1,31 @@
+{
+  "name": "@openbot/ai-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenBot AI Engine — Model routing, streaming inference, tool execution, agent orchestration",
+  "main": "./dist/main.js",
+  "scripts": {
+    "dev": "nest start --watch",
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "start:prod": "NODE_ENV=production node dist/main.js",
+    "lint": "eslint src/",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@openbot/core": "*",
+    "@openbot/database": "*",
+    "@openbot/shared-types": "*",
+    "ioredis": "^5.4.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "rimraf": "^6.0.0",
+    "typescript": "^5.7.0"
+  }
+}

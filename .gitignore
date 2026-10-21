@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+
+# Prisma
+packages/database/src/generated/
+
+# Tauri
+apps/desktop/src-tauri/target/
+
+# Turbo
+.turbo/
+
+# Docker
+docker-data/
+
+# Mobile (Expo & Android/iOS)
+.expo/
+apps/mobile/.expo/
+apps/mobile/android/.gradle/
+apps/mobile/android/app/build/
+apps/mobile/android/build/
+*.apk
+*.aab
+
+# Local data & memory
+.openbot_data/
+**/.openbot_data/

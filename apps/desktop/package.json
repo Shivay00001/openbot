@@ -1,0 +1,21 @@
+{
+  "name": "@openbot/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenBot Desktop Application (Windows, macOS, Linux) with Tauri v2",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "dependencies": {
+    "@openbot/core": "*",
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-shell": "^2.0.0",
+    "@tauri-apps/plugin-fs": "^2.0.0",
+    "@tauri-apps/plugin-os": "^2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "typescript": "^5.7.0"
+  }
+}

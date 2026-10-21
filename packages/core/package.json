@@ -1,0 +1,85 @@
+{
+  "name": "@openbot/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenBot shared core — agent loop, model router, tools, memory, phone mode, desktop mode, local weights",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./agent": {
+      "import": "./dist/agent/index.js",
+      "types": "./dist/agent/index.d.ts"
+    },
+    "./models": {
+      "import": "./dist/models/index.js",
+      "types": "./dist/models/index.d.ts"
+    },
+    "./local-weights": {
+      "import": "./dist/local-weights/index.js",
+      "types": "./dist/local-weights/index.d.ts"
+    },
+    "./phone": {
+      "import": "./dist/phone/index.js",
+      "types": "./dist/phone/index.d.ts"
+    },
+    "./desktop": {
+      "import": "./dist/desktop/index.js",
+      "types": "./dist/desktop/index.d.ts"
+    },
+    "./browser": {
+      "import": "./dist/browser/index.js",
+      "types": "./dist/browser/index.d.ts"
+    },
+    "./voice": {
+      "import": "./dist/voice/index.js",
+      "types": "./dist/voice/index.d.ts"
+    },
+    "./skills": {
+      "import": "./dist/skills/index.js",
+      "types": "./dist/skills/index.d.ts"
+    },
+    "./tools": {
+      "import": "./dist/tools/index.js",
+      "types": "./dist/tools/index.d.ts"
+    },
+    "./memory": {
+      "import": "./dist/memory/index.js",
+      "types": "./dist/memory/index.d.ts"
+    },
+    "./computer": {
+      "import": "./dist/computer/index.js",
+      "types": "./dist/computer/index.d.ts"
+    },
+    "./vflow": {
+      "import": "./dist/vflow/index.js",
+      "types": "./dist/vflow/index.d.ts"
+    },
+    "./types": {
+      "import": "./dist/types/index.js",
+      "types": "./dist/types/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rimraf dist",
+    "test": "vitest run",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "openai": "^4.80.0",
+    "zod": "^3.24.0",
+    "uuid": "^11.0.0",
+    "eventemitter3": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/uuid": "^10.0.0",
+    "rimraf": "^6.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
