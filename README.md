@@ -92,12 +92,59 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 
-## 🐳 Docker Deployment
+## ⚡ 1-Click Free Tier Cloud Hosting (Zero Cost)
 
-### Full Stack (Web + API + AI Engine + Postgres + Redis + Ollama)
-```bash
-docker-compose up -d
-```
+OpenBot is pre-configured to run 100% free with zero infrastructure cost using world-class free-tier providers:
+
+| Layer | Free Tier Provider | Limits / Perks | Config File |
+| :--- | :--- | :--- | :--- |
+| **Web Dashboard** | [Vercel](https://vercel.com) (Hobby) | Unlimited Serverless Next.js 15, Global CDN | [`vercel.json`](vercel.json) |
+| **Full Stack + DB**| [Render](https://render.com) | Free Web Service + Managed PostgreSQL 16 | [`render.yaml`](render.yaml) |
+| **Cloud Database** | [Neon](https://neon.tech) / [Supabase](https://supabase.com) | Serverless Postgres with pooled connections | `DATABASE_URL` |
+| **AI Inference** | [Groq](https://groq.com) / [Ollama](https://ollama.ai) | DeepSeek R1 & Llama 3.3 70B (300+ T/s free) | `GROQ_API_KEY` |
+
+### 🚀 Option A: Deploy to Vercel (1-Click)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FShivay00001%2Fopenbot&project-name=openbot&root-directory=apps/web)
+
+1. Click the button above to import `Shivay00001/openbot`.
+2. Set Root Directory to `apps/web`.
+3. Add your free `DATABASE_URL` (from Neon or Supabase) and `JWT_SECRET`.
+4. Hit **Deploy** — your live dashboard is instantly online!
+
+### 🚀 Option B: Deploy to Render Blueprint (1-Click Full Stack)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Shivay00001/openbot)
+
+Render reads [`render.yaml`](render.yaml) to automatically provision:
+- Managed PostgreSQL database (`openbot-db`, Free Plan)
+- OpenBot Web frontend (`openbot-web`, Free Plan)
+- API Gateway backend (`openbot-api-gateway`, Free Plan)
+
+---
+
+## 🐳 Docker Multi-Device Orchestration (One-Click)
+
+### 🚀 1-Click All-in-One Deployment (OS + Browser + Phone Bridge + Ollama)
+Run directly via the included launcher script:
+- **Windows**: Double-click `run-one-click.bat` or run:
+  ```cmd
+  run-one-click.bat
+  ```
+- **Linux / macOS**:
+  ```bash
+  chmod +x run-one-click.sh && ./run-one-click.sh
+  ```
+- **npm command**:
+  ```bash
+  npm run docker:one-click
+  ```
+
+This automatically orchestrates:
+1. `openbot-os-desktop`: Full Ubuntu XFCE Desktop with live noVNC web streaming on port `6080`.
+2. `openbot-browser-sandbox`: Chromium + Chrome DevTools Protocol (CDP) on port `3002`.
+3. `openbot-phone-bridge`: Real physical USB & Wireless ADB daemon + MJPEG screen streaming on port `8000`.
+4. `openbot-web`: Next.js 15 UI on port `3000`.
+5. `openbot-api-gateway` (:4000) & `openbot-ai-engine` (:4001).
+6. PostgreSQL 16 (:5432), Redis 7 (:6379), and Ollama (:11434).
 
 ### Free-Tier Minimalist Stack (Zero External Costs)
 ```bash
