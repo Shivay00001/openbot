@@ -5,12 +5,16 @@
 
 import { Injectable, Inject, ForbiddenException } from '@nestjs/common';
 import type { PrismaClient } from '@openbot/database';
+import { KeysService } from '../keys/keys.service';
 
 const AI_ENGINE_URL = process.env.AI_ENGINE_URL || 'http://localhost:4001';
 
 @Injectable()
 export class ChatService {
-  constructor(@Inject('PRISMA') private readonly prisma: PrismaClient) {}
+  constructor(
+    @Inject('PRISMA') private readonly prisma: PrismaClient,
+    private readonly keysService: KeysService,
+  ) {}
 
   async sendMessage(userId: string, data: {
     conversationId: string;
@@ -41,8 +45,12 @@ export class ChatService {
         where: { userId, provider: data.provider, isActive: true },
       });
       if (key) {
-        // Decrypt key (simplified — use proper encryption in production)
-        apiKey = key.encryptedKey;
+        // Decrypt the stored key with KeysService (AES-256-GCM) — the raw
+        // ciphertext must never be sent to the AI engine as if it were a key.
+        const decrypted = await this.keysService.getDecryptedKey(userId, data.provider);
+        if (decrypted && decrypted !== '****') {
+          apiKey = decrypted;
+        }
         await this.prisma.apiKey.update({
           where: { id: key.id },
           data: { lastUsedAt: new Date(), usageCount: { increment: 1 } },

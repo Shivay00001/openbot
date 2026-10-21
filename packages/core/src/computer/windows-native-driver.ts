@@ -24,18 +24,16 @@ export class WindowsNativeDriver {
    * Get current cursor screen position
    */
   async getCursorPosition(): Promise<ScreenPoint> {
-    if (!this.isWindows) return { x: 0, y: 0 };
-    try {
-      const psCommand = `powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Cursor]::Position.X; [System.Windows.Forms.Cursor]::Position.Y"`;
-      const { stdout } = await execAsync(psCommand);
-      const lines = stdout.trim().split(/\r?\n/).map((l) => parseInt(l.trim(), 10)).filter((n) => !isNaN(n));
-      if (lines.length >= 2) {
-        return { x: lines[0], y: lines[1] };
-      }
-    } catch {
-      // Fallback
+    if (!this.isWindows) {
+      throw new Error('WindowsNativeDriver only works on Windows. On macOS/Linux use PyAutoGUIAdapter or RobotJSAdapter.');
     }
-    return { x: 960, y: 540 };
+    const psCommand = `powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Cursor]::Position.X; [System.Windows.Forms.Cursor]::Position.Y"`;
+    const { stdout } = await execAsync(psCommand);
+    const lines = stdout.trim().split(/\r?\n/).map((l) => parseInt(l.trim(), 10)).filter((n) => !isNaN(n));
+    if (lines.length >= 2) {
+      return { x: lines[0], y: lines[1] };
+    }
+    throw new Error('Failed to read cursor position from Windows API.');
   }
 
   /**
@@ -216,7 +214,7 @@ ${clickCalls}
    */
   async captureScreenshot(): Promise<string> {
     if (!this.isWindows) {
-      return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+      throw new Error('WindowsNativeDriver screenshots require Windows. On macOS/Linux use PyAutoGUIAdapter.');
     }
 
     try {
@@ -241,11 +239,10 @@ $bmp.Dispose();
       if (base64.length > 100) {
         return `data:image/png;base64,${base64}`;
       }
-    } catch {
-      // Fallback
+      throw new Error('Screen capture returned no image data.');
+    } catch (err: any) {
+      throw new Error(`Windows screen capture failed: ${err.message}`);
     }
-
-    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
   }
 
   /**

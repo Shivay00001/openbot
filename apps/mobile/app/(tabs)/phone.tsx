@@ -1,6 +1,10 @@
 /**
  * OpenBot Mobile — Agentic Phone Mode Screen
- * Real ADB device scanning, wireless connect, touch dispatch, and autonomous goals.
+ * Controls THIS phone through the on-device OpenBot Accessibility Service,
+ * exposed by the bundled LocalPhoneServer at http://127.0.0.1:8765
+ * (endpoints: /health, /screen/hierarchy, /action/tap|type|swipe|key|launch).
+ * Every action is a real HTTP call to that server and the UI reports the
+ * server's actual response — nothing is simulated.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -40,9 +44,37 @@ const QUICK_ACTIONS = [
   { label: 'Open Settings', pkg: 'com.android.settings', icon: 'settings' as const },
 ];
 
+const LOCAL_SERVER = 'http://127.0.0.1:8765';
+
+interface LocalServerResponse {
+  success: boolean;
+  serviceActive?: boolean;
+  version?: string;
+  error?: string;
+  [key: string]: unknown;
+}
+
+/** Real HTTP call to the on-device LocalPhoneServer with a hard timeout. */
+async function localServerRequest(route: string, body?: Record<string, unknown>): Promise<LocalServerResponse> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000);
+  try {
+    const res = await fetch(`${LOCAL_SERVER}${route}`, {
+      method: body ? 'POST' : 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    return (await res.json()) as LocalServerResponse;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export default function PhoneModeScreen() {
   const [devices, setDevices] = useState<AdbDevice[]>([]);
   const [isScanning, setIsScanning] = useState(false);
+  const [serverStatus, setServerStatus] = useState<'unknown' | 'online' | 'offline'>('unknown');
   const [wirelessIp, setWirelessIp] = useState('192.168.1.');
   const [autonomousGoal, setAutonomousGoal] = useState('');
   const [isExecuting, setIsExecuting] = useState(false);
@@ -56,15 +88,28 @@ export default function PhoneModeScreen() {
 
   const scanDevices = useCallback(async () => {
     setIsScanning(true);
-    addLog('Scanning for connected Android devices via ADB...', 'action');
-
-    // In a real implementation, this would call a local server or use a native module
-    // For now, we simulate the ADB scan
-    setTimeout(() => {
-      addLog('ADB daemon active on tcp:5037. No USB/Wi-Fi devices attached.', 'info');
-      addLog('Tip: Connect your Android phone via USB with USB Debugging enabled.', 'info');
+    addLog('Checking the on-device OpenBot server (127.0.0.1:8765)...', 'action');
+    try {
+      const health = await localServerRequest('/health');
+      if (health.success) {
+        setServerStatus('online');
+        setDevices([
+          { serial: 'local-device', status: 'device', model: 'This phone (Accessibility Service)', device: 'local' },
+        ]);
+        addLog(`On-device server online (v${health.version || '?'}). This phone is controllable.`, 'success');
+      } else {
+        setServerStatus('offline');
+        setDevices([]);
+        addLog(health.error || 'Accessibility Service is not enabled.', 'error');
+        addLog('Enable it in Android Settings → Accessibility → OpenBot.', 'info');
+      }
+    } catch {
+      setServerStatus('offline');
+      setDevices([]);
+      addLog('On-device server unreachable at 127.0.0.1:8765. The OpenBot background service is not running.', 'error');
+    } finally {
       setIsScanning(false);
-    }, 1500);
+    }
   }, [addLog]);
 
   useEffect(() => {
@@ -76,18 +121,28 @@ export default function PhoneModeScreen() {
       Alert.alert('Enter IP', 'Please enter your phone\'s IP address from Developer Options → Wireless Debugging');
       return;
     }
-    addLog(`Attempting wireless ADB connection to ${wirelessIp}...`, 'action');
-    setTimeout(() => {
-      addLog(`Connection attempt to ${wirelessIp} — ensure Wireless Debugging is enabled on your phone.`, 'info');
-    }, 1000);
-  }, [wirelessIp, addLog]);
+    // Wireless ADB pairing is initiated from a HOST computer (adb pair /
+    // adb connect). This screen controls THIS phone through its on-device
+    // accessibility server, so we verify that server instead of pretending
+    // to open an ADB connection from the phone itself.
+    addLog(`Wireless ADB is started from a host computer: run "adb connect ${wirelessIp}" on your PC.`, 'info');
+    addLog('Verifying the on-device control server instead...', 'action');
+    void scanDevices();
+  }, [wirelessIp, addLog, scanDevices]);
 
   const handleQuickAction = useCallback(
-    (label: string, pkg: string) => {
-      addLog(`Dispatching ADB intent: am start ${pkg}`, 'action');
-      setTimeout(() => {
-        addLog(`✓ Launch command sent for ${label} (${pkg})`, 'success');
-      }, 500);
+    async (label: string, pkg: string) => {
+      addLog(`Launching ${label} via the on-device server...`, 'action');
+      try {
+        const res = await localServerRequest('/action/launch', { packageName: pkg });
+        if (res.success) {
+          addLog(`✓ ${label} launched (${pkg})`, 'success');
+        } else {
+          addLog(`Launch failed for ${label}: ${res.error || 'server reported failure'}`, 'error');
+        }
+      } catch {
+        addLog(`Launch failed for ${label}: on-device server unreachable. Enable the Accessibility Service first.`, 'error');
+      }
     },
     [addLog],
   );
@@ -97,23 +152,34 @@ export default function PhoneModeScreen() {
     setIsExecuting(true);
     addLog(`Agentic Phone Controller: Processing goal "${autonomousGoal}"`, 'action');
 
-    // Parse and dispatch
     const goalLower = autonomousGoal.toLowerCase();
-    let targetPkg = 'com.android.chrome';
+    let targetPkg: string | null = null;
     if (goalLower.includes('whatsapp')) targetPkg = 'com.whatsapp';
     else if (goalLower.includes('uber')) targetPkg = 'com.ubercab';
     else if (goalLower.includes('maps')) targetPkg = 'com.google.android.apps.maps';
     else if (goalLower.includes('youtube')) targetPkg = 'com.google.android.youtube';
+    else if (goalLower.includes('chrome') || goalLower.includes('browser')) targetPkg = 'com.android.chrome';
+    else if (goalLower.includes('camera')) targetPkg = 'com.android.camera';
+    else if (goalLower.includes('settings')) targetPkg = 'com.android.settings';
 
-    setTimeout(() => {
+    try {
+      if (!targetPkg) {
+        addLog('This goal does not name a launchable app. On-device quick goals can launch one app; multi-step goals run from the OpenBot web/host Artemis navigator.', 'error');
+        return;
+      }
       addLog(`Agent: Resolved target package → ${targetPkg}`, 'info');
-      addLog(`Agent: Dispatching launch intent via ADB shell...`, 'action');
-      setTimeout(() => {
-        addLog(`✓ Autonomous goal executed: "${autonomousGoal}"`, 'success');
-        setIsExecuting(false);
+      const res = await localServerRequest('/action/launch', { packageName: targetPkg });
+      if (res.success) {
+        addLog(`✓ Goal completed: launched ${targetPkg}`, 'success');
         setAutonomousGoal('');
-      }, 800);
-    }, 600);
+      } else {
+        addLog(`Goal failed: ${res.error || 'server reported failure'}`, 'error');
+      }
+    } catch {
+      addLog('Goal failed: on-device server unreachable. Enable the Accessibility Service first.', 'error');
+    } finally {
+      setIsExecuting(false);
+    }
   }, [autonomousGoal, addLog]);
 
   return (
@@ -128,11 +194,11 @@ export default function PhoneModeScreen() {
             <View style={styles.bannerTitleRow}>
               <Text style={styles.bannerTitle}>Agentic Phone Mode</Text>
               <View style={styles.hardwareBadge}>
-                <Text style={styles.hardwareBadgeText}>Real ADB</Text>
+                <Text style={styles.hardwareBadgeText}>On-device</Text>
               </View>
             </View>
             <Text style={styles.bannerSubtitle}>
-              Real Android Debug Bridge hardware automation via tcp:5037
+              On-device automation via the OpenBot Accessibility Service (local server :8765)
             </Text>
           </View>
         </View>
@@ -154,12 +220,14 @@ export default function PhoneModeScreen() {
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <Ionicons name="hardware-chip" size={16} color={Colors.accentCyan} />
-          <Text style={styles.cardTitle}>ADB Hardware Status</Text>
+          <Text style={styles.cardTitle}>Device Control Status</Text>
         </View>
 
         <View style={styles.statusRow}>
-          <Text style={styles.statusLabel}>ADB Daemon</Text>
-          <Text style={[styles.statusValue, { color: Colors.accentEmerald }]}>Running (tcp:5037)</Text>
+          <Text style={styles.statusLabel}>On-device Server</Text>
+          <Text style={[styles.statusValue, { color: serverStatus === 'online' ? Colors.accentEmerald : Colors.textMuted }]}>
+            {serverStatus === 'online' ? 'Online (127.0.0.1:8765)' : serverStatus === 'offline' ? 'Offline — enable Accessibility' : 'Checking...'}
+          </Text>
         </View>
         <View style={styles.statusRow}>
           <Text style={styles.statusLabel}>Devices Attached</Text>
@@ -169,7 +237,9 @@ export default function PhoneModeScreen() {
         </View>
         <View style={styles.statusRow}>
           <Text style={styles.statusLabel}>Input Bridge</Text>
-          <Text style={[styles.statusValue, { color: Colors.accentEmerald }]}>Touch + Gesture Ready</Text>
+          <Text style={[styles.statusValue, { color: serverStatus === 'online' ? Colors.accentEmerald : Colors.textMuted }]}>
+            {serverStatus === 'online' ? 'Touch + Gesture Ready' : 'Unavailable'}
+          </Text>
         </View>
       </View>
 
@@ -253,7 +323,7 @@ export default function PhoneModeScreen() {
       <View style={[styles.card, { flex: 1 }]}>
         <View style={styles.cardHeader}>
           <Ionicons name="terminal" size={16} color={Colors.accentCyan} />
-          <Text style={styles.cardTitle}>ADB Action Log</Text>
+          <Text style={styles.cardTitle}>Action Log</Text>
           <View style={styles.liveIndicator}>
             <View style={styles.liveDot} />
             <Text style={styles.liveText}>LIVE</Text>

@@ -1,10 +1,11 @@
 /**
  * Browser-Use Agentic Automation Adapter 🤖
- * Inspired by the browser-use Python & TS agent framework.
- * Focuses on LLM-friendly DOM tree extraction, interactive element indexing, and step verification.
+ * LLM-oriented layer over the REAL Playwright engine: after each navigation
+ * it indexes the live DOM's interactive elements ([0], [1], [2], ...) so an
+ * agent can act by index — the browser-use pattern — while every action is
+ * executed for real by Chromium underneath.
  */
 
-import { v4 as uuid } from 'uuid';
 import type {
   UniversalBrowserAdapter,
   BrowserEngineType,
@@ -13,6 +14,7 @@ import type {
   ExtractedPageContent,
   BrowserElement,
 } from '../types.js';
+import { PlaywrightAdapter } from './playwright-adapter.js';
 
 export interface BrowserUseActionPlan {
   action: 'click' | 'type' | 'scroll' | 'wait' | 'done';
@@ -23,115 +25,96 @@ export interface BrowserUseActionPlan {
 
 export class BrowserUseAdapter implements UniversalBrowserAdapter {
   readonly engineType: BrowserEngineType = 'browser_use';
-  private currentUrl = 'about:blank';
+  private readonly playwright = new PlaywrightAdapter();
   private indexedElements: BrowserElement[] = [];
-  private isInitialized = false;
 
   async initialize(options?: { headless?: boolean; devicePreset?: string; proxyUrl?: string }): Promise<void> {
-    this.isInitialized = true;
+    await this.playwright.initialize(options);
+    await this.refreshIndex();
+  }
+
+  /** Current indexed interactive elements from the live DOM. */
+  getIndexedElements(): BrowserElement[] {
+    return this.indexedElements;
+  }
+
+  private async refreshIndex(): Promise<void> {
+    try {
+      this.indexedElements = await this.playwright.getInteractiveElements();
+    } catch {
+      this.indexedElements = [];
+    }
   }
 
   async navigate(url: string, options?: BrowserActionOptions): Promise<BrowserActionResult> {
-    const start = Date.now();
-    this.currentUrl = url.startsWith('http') ? url : `https://${url}`;
-    this.indexedElements = this.generateIndexedElements(this.currentUrl);
-
-    return {
-      success: true,
-      message: `[Browser-Use] Navigated to ${this.currentUrl} and indexed ${this.indexedElements.length} interactive elements for LLM planning.`,
-      currentUrl: this.currentUrl,
-      durationMs: Date.now() - start,
-    };
+    const result = await this.playwright.navigate(url, options);
+    if (result.success) {
+      await this.refreshIndex();
+      result.message += ` Indexed ${this.indexedElements.length} interactive elements for LLM planning.`;
+    }
+    return result;
   }
 
+  /** Accepts a CSS selector, visible text, or an element index ("3" / "[3]"). */
   async click(selectorOrCoord: string | { x: number; y: number }): Promise<BrowserActionResult> {
-    const start = Date.now();
-    return {
-      success: true,
-      message: `[Browser-Use] Click dispatched on ${JSON.stringify(selectorOrCoord)} with visual post-action verification.`,
-      currentUrl: this.currentUrl,
-      durationMs: Date.now() - start,
-    };
+    if (typeof selectorOrCoord === 'string') {
+      const indexMatch = selectorOrCoord.trim().match(/^\[?(\d+)\]?$/);
+      if (indexMatch) {
+        const element = this.indexedElements[Number(indexMatch[1])];
+        if (!element) {
+          return {
+            success: false,
+            message: `[Browser-Use] Element index ${indexMatch[1]} not in the current index (${this.indexedElements.length} elements). Re-navigate to refresh.`,
+            error: 'index_out_of_range',
+            durationMs: 0,
+          };
+        }
+        const result = await this.playwright.click(element.selector);
+        if (result.success) await this.refreshIndex();
+        return result;
+      }
+    }
+    const result = await this.playwright.click(selectorOrCoord as string);
+    if (result.success) await this.refreshIndex();
+    return result;
   }
 
   async type(selector: string, text: string, options?: { clearFirst?: boolean; submit?: boolean }): Promise<BrowserActionResult> {
-    const start = Date.now();
-    return {
-      success: true,
-      message: `[Browser-Use] Typed "${text}" into selector ${selector}`,
-      currentUrl: this.currentUrl,
-      durationMs: Date.now() - start,
-    };
+    const indexMatch = selector.trim().match(/^\[?(\d+)\]?$/);
+    const target = indexMatch && this.indexedElements[Number(indexMatch[1])]
+      ? this.indexedElements[Number(indexMatch[1])].selector
+      : selector;
+    const result = await this.playwright.type(target, text, options);
+    if (result.success) await this.refreshIndex();
+    return result;
   }
 
-  async scroll(direction: 'up' | 'down' | 'top' | 'bottom', distancePx = 500): Promise<BrowserActionResult> {
-    const start = Date.now();
-    return {
-      success: true,
-      message: `[Browser-Use] Scrolled ${direction} ${distancePx}px and re-indexed viewport elements.`,
-      currentUrl: this.currentUrl,
-      durationMs: Date.now() - start,
-    };
+  async scroll(direction: 'up' | 'down' | 'top' | 'bottom', distancePx?: number): Promise<BrowserActionResult> {
+    const result = await this.playwright.scroll(direction, distancePx);
+    if (result.success) await this.refreshIndex();
+    return result;
   }
 
   async touch(type: 'tap' | 'double_tap' | 'swipe' | 'pinch', params: Record<string, unknown>): Promise<BrowserActionResult> {
-    const start = Date.now();
-    return {
-      success: true,
-      message: `[Browser-Use] Touch event ${type} applied`,
-      currentUrl: this.currentUrl,
-      durationMs: Date.now() - start,
-    };
+    return this.playwright.touch(type, params);
   }
 
   async captureScreenshot(): Promise<string> {
-    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    return this.playwright.captureScreenshot();
   }
 
   async extractContent(): Promise<ExtractedPageContent> {
-    return {
-      title: 'Browser-Use State',
-      url: this.currentUrl,
-      markdown: `# Clean Agentic Representation\nURL: ${this.currentUrl}\nElements: ${this.indexedElements.length} available`,
-      text: `Clean content extracted by Browser-Use from ${this.currentUrl}`,
-      links: [],
-      tables: [],
-      metadata: { engine: 'browser_use', indexedElementsCount: String(this.indexedElements.length) },
-    };
+    const content = await this.playwright.extractContent();
+    content.metadata = { ...content.metadata, engine: 'browser_use', indexedElements: String(this.indexedElements.length) };
+    return content;
   }
 
   async getInteractiveElements(): Promise<BrowserElement[]> {
+    await this.refreshIndex();
     return this.indexedElements;
   }
 
   async close(): Promise<void> {
-    this.isInitialized = false;
-  }
-
-  private generateIndexedElements(url: string): BrowserElement[] {
-    return [
-      {
-        id: 'el_0',
-        selector: '[data-agent-index="0"]',
-        tagName: 'input',
-        text: '',
-        attributes: { name: 'search', placeholder: 'Search...' },
-        isInteractive: true,
-        isVisible: true,
-        bounds: { x: 200, y: 120, width: 450, height: 40 },
-        accessibilityLabel: 'Main search input',
-      },
-      {
-        id: 'el_1',
-        selector: '[data-agent-index="1"]',
-        tagName: 'button',
-        text: 'Submit Search',
-        attributes: { type: 'submit' },
-        isInteractive: true,
-        isVisible: true,
-        bounds: { x: 660, y: 120, width: 80, height: 40 },
-        accessibilityLabel: 'Submit Search Button',
-      },
-    ];
+    await this.playwright.close();
   }
 }

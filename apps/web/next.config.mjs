@@ -14,8 +14,10 @@ const nextConfig = {
         tls: false,
         crypto: false,
         stream: false,
+        'stream/promises': false,
         http: false,
         https: false,
+        http2: false,
         zlib: false,
       };
     }

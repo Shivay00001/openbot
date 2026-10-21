@@ -14,7 +14,7 @@ import {
   Search,
   Radio
 } from 'lucide-react';
-import { SkillEngine, BUILTIN_SKILLS, type Skill } from '@openbot/core';
+import { SkillEngine, BUILTIN_SKILLS, type Skill } from '@openbot/core/skills';
 
 export const SkillStudioView: React.FC = () => {
   const [engine] = useState(() => new SkillEngine());

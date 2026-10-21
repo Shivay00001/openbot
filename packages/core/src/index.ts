@@ -143,6 +143,18 @@ export type {
   vFlowNodeType,
 } from './vflow/index.js';
 
+// Security: Zero-Cloud egress guard & encrypted key vault 🔐
+export {
+  ZeroCloudGuard,
+  ZeroCloudBlockedError,
+  zeroCloudGuard,
+  isLocalUrl,
+  installGlobalFetchGuard,
+  uninstallGlobalFetchGuard,
+  KeyVault,
+} from './security/index.js';
+export type { KeyVaultOptions } from './security/index.js';
+
 // Voice Pipeline & Autonomous Phone Call Agent 🎙️📞
 export {
   VoicePipelineAgent,

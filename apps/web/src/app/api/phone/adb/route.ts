@@ -1,290 +1,138 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { AdbController, AdbUnavailableError, isValidPackageName } from '@openbot/core/phone';
+import type { PhoneKeyCode } from '@openbot/core/phone';
 
-const execAsync = promisify(exec);
+/**
+ * ADB bridge API. All device actions delegate to the core AdbController,
+ * which executes `adb` with argv arrays (never shell string interpolation),
+ * so request parameters cannot inject shell commands.
+ */
 
-// Determine phone bridge address if running in docker or host
-const PHONE_BRIDGE_URL = process.env.PHONE_BRIDGE_URL || 'http://localhost:8000';
-const ADB_HOST = process.env.ADB_HOST;
-const ADB_PORT = process.env.ADB_PORT || '5037';
+const adb = new AdbController();
 
-function getAdbPrefix(): string {
-  if (ADB_HOST) {
-    return `adb -H ${ADB_HOST} -P ${ADB_PORT}`;
+const VALID_KEYS: PhoneKeyCode[] = [
+  'HOME', 'BACK', 'RECENT_APPS', 'POWER', 'VOLUME_UP', 'VOLUME_DOWN', 'ENTER',
+];
+
+function adbErrorResponse(error: unknown) {
+  if (error instanceof AdbUnavailableError) {
+    return NextResponse.json({ success: false, adbInstalled: false, error: error.message }, { status: 503 });
   }
-  return 'adb';
+  return NextResponse.json(
+    { success: false, error: error instanceof Error ? error.message : 'ADB execution failed' },
+    { status: 500 }
+  );
 }
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const action = searchParams.get('action') || 'devices';
-
-  // 1. Check if Docker Phone Bridge is alive
-  let isDockerBridgeOnline = false;
   try {
-    const bridgeRes = await fetch(`${PHONE_BRIDGE_URL}/status`, { signal: AbortSignal.timeout(1000) });
-    if (bridgeRes.ok) {
-      isDockerBridgeOnline = true;
-    }
-  } catch {
-    isDockerBridgeOnline = false;
-  }
+    const { searchParams } = new URL(req.url);
+    const action = searchParams.get('action') || 'devices';
 
-  // 2. Handle Stream URL Request
-  if (action === 'stream_url') {
-    return NextResponse.json({
-      success: true,
-      streamUrl: isDockerBridgeOnline ? `${PHONE_BRIDGE_URL}/stream` : null,
-      dockerBridgeOnline: isDockerBridgeOnline,
-    });
-  }
-
-  // 3. List Devices
-  if (action === 'devices') {
-    // If docker bridge is online, fetch from it first
-    if (isDockerBridgeOnline) {
-      try {
-        const res = await fetch(`${PHONE_BRIDGE_URL}/devices`);
-        const data = await res.json();
-        return NextResponse.json({
-          adbInstalled: true,
-          dockerBridgeOnline: true,
-          deviceCount: data.devices ? data.devices.length : 0,
-          devices: data.devices || [],
-          source: 'docker-phone-bridge',
-        });
-      } catch {
-        // fallback to local adb
-      }
-    }
-
-    try {
-      const adbCmd = `${getAdbPrefix()} devices -l`;
-      const { stdout } = await execAsync(adbCmd);
-      const lines = stdout.split('\n').filter((l) => l.trim() && !l.startsWith('*') && !l.startsWith('List of'));
-      const devices = lines.map((line) => {
-        const parts = line.trim().split(/\s+/);
-        const serial = parts[0];
-        const status = parts[1];
-        const modelMatch = line.match(/model:([^\s]+)/);
-        const deviceMatch = line.match(/device:([^\s]+)/);
-        return {
-          serial,
-          status,
-          model: modelMatch ? modelMatch[1] : 'Android Device',
-          device: deviceMatch ? deviceMatch[1] : 'generic',
-        };
-      });
-
+    if (action === 'devices') {
+      const devices = await adb.listDevices();
       return NextResponse.json({
         adbInstalled: true,
-        dockerBridgeOnline: isDockerBridgeOnline,
         deviceCount: devices.length,
-        devices,
-        source: 'local_adb',
-      });
-    } catch (err: unknown) {
-      return NextResponse.json({
-        adbInstalled: false,
-        dockerBridgeOnline: isDockerBridgeOnline,
-        error: err instanceof Error ? err.message : 'ADB not detected',
-        deviceCount: 0,
-        devices: [],
+        devices: devices.map((d) => ({
+          serial: d.serial,
+          status: d.state,
+          model: d.model || 'Android Device',
+          device: d.product || 'generic',
+        })),
       });
     }
-  }
 
-  // 4. Capture Screenshot
-  if (action === 'screenshot') {
-    if (isDockerBridgeOnline) {
-      try {
-        const res = await fetch(`${PHONE_BRIDGE_URL}/screenshot`);
-        if (res.ok) {
-          const arrayBuffer = await res.arrayBuffer();
-          const base64 = Buffer.from(arrayBuffer).toString('base64');
-          return NextResponse.json({
-            success: true,
-            mimeType: 'image/png',
-            base64: `data:image/png;base64,${base64}`,
-            source: 'docker-phone-bridge',
-          });
-        }
-      } catch {
-        // fallback
+    if (action === 'screenshot') {
+      const shot = await adb.captureScreenshot();
+      if (!shot.success) {
+        return NextResponse.json({ success: false, error: shot.error || 'Screencap failed' });
       }
-    }
-
-    try {
-      const adbCmd = `${getAdbPrefix()} exec-out screencap -p`;
-      const { stdout } = await execAsync(adbCmd, {
-        encoding: 'base64',
-        maxBuffer: 25 * 1024 * 1024,
-      });
-
       return NextResponse.json({
         success: true,
         mimeType: 'image/png',
-        base64: `data:image/png;base64,${stdout}`,
-        source: 'local_adb',
-      });
-    } catch {
-      return NextResponse.json({
-        success: false,
-        error: 'No active device connected or screencap failed',
+        base64: shot.dataUrl,
       });
     }
-  }
 
-  // 5. UIAutomator Tree
-  if (action === 'ui_tree') {
-    try {
-      const prefix = getAdbPrefix();
-      await execAsync(`${prefix} shell uiautomator dump /sdcard/window_dump.xml`);
-      const { stdout } = await execAsync(`${prefix} shell cat /sdcard/window_dump.xml`);
-      return NextResponse.json({
-        success: true,
-        xml: stdout,
-      });
-    } catch {
-      return NextResponse.json({
-        success: false,
-        error: 'Failed to dump uiautomator tree',
-      });
+    if (action === 'ui_tree') {
+      try {
+        const xml = await adb.dumpHierarchy();
+        return NextResponse.json({ success: true, xml });
+      } catch (err: unknown) {
+        return NextResponse.json({
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to dump uiautomator tree',
+        });
+      }
     }
-  }
 
-  return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
+    return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
+  } catch (error: unknown) {
+    return adbErrorResponse(error);
+  }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { action, x, y, x1, y1, x2, y2, duration, text, keyCode, packageName, targetIp, apkPath } = body;
+    const { action, x, y, text, keyCode, packageName, targetIp } = await req.json();
 
-    // Check if Docker Phone Bridge is online to forward command
-    let isDockerBridgeOnline = false;
-    try {
-      const test = await fetch(`${PHONE_BRIDGE_URL}/status`, { signal: AbortSignal.timeout(800) });
-      if (test.ok) isDockerBridgeOnline = true;
-    } catch {
-      isDockerBridgeOnline = false;
-    }
-
-    // Connect to wireless IP
-    if (action === 'connect' && targetIp) {
-      if (isDockerBridgeOnline) {
-        const res = await fetch(`${PHONE_BRIDGE_URL}/connect`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ip: targetIp }),
-        });
-        const data = await res.json();
-        return NextResponse.json({ success: true, output: data.output, source: 'docker-phone-bridge' });
+    if (action === 'connect') {
+      // Strict host:port validation before anything reaches adb.
+      const match = typeof targetIp === 'string' ? targetIp.match(/^([a-zA-Z0-9.-]+):(\d{1,5})$/) : null;
+      if (!match) {
+        return NextResponse.json(
+          { success: false, error: 'targetIp must be in host:port form (e.g. 192.168.1.10:5555)' },
+          { status: 400 }
+        );
       }
-
-      const { stdout, stderr } = await execAsync(`${getAdbPrefix()} connect ${targetIp}`);
-      return NextResponse.json({ success: true, output: stdout || stderr, source: 'local_adb' });
-    }
-
-    // Tap coordinate
-    if (action === 'tap' && x !== undefined && y !== undefined) {
-      if (isDockerBridgeOnline) {
-        await fetch(`${PHONE_BRIDGE_URL}/tap`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ x, y }),
-        });
-        return NextResponse.json({ success: true, message: `Docker ADB tap at (${x}, ${y})`, source: 'docker' });
+      const port = Number(match[2]);
+      if (port < 1 || port > 65535) {
+        return NextResponse.json({ success: false, error: 'Port out of range' }, { status: 400 });
       }
-
-      await execAsync(`${getAdbPrefix()} shell input tap ${Math.round(x)} ${Math.round(y)}`);
-      return NextResponse.json({ success: true, message: `Real ADB tap at (${x}, ${y})`, source: 'local' });
+      const result = await adb.connectTcp(match[1], port);
+      return NextResponse.json({ success: result.success, message: result.message });
     }
 
-    // Swipe gesture
-    if (action === 'swipe' && x1 !== undefined && y1 !== undefined && x2 !== undefined && y2 !== undefined) {
-      if (isDockerBridgeOnline) {
-        await fetch(`${PHONE_BRIDGE_URL}/swipe`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ x1, y1, x2, y2, duration: duration || 300 }),
-        });
-        return NextResponse.json({ success: true, message: `Docker ADB swipe executed` });
+    if (action === 'tap') {
+      const nx = Number(x);
+      const ny = Number(y);
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
+        return NextResponse.json({ success: false, error: 'x and y must be numbers' }, { status: 400 });
       }
-
-      await execAsync(`${getAdbPrefix()} shell input swipe ${Math.round(x1)} ${Math.round(y1)} ${Math.round(x2)} ${Math.round(y2)} ${duration || 300}`);
-      return NextResponse.json({ success: true, message: `Real ADB swipe executed` });
+      const result = await adb.tap(nx, ny);
+      return NextResponse.json({ success: result.success, message: result.output || result.command });
     }
 
-    // Type text
-    if (action === 'type' && text) {
-      if (isDockerBridgeOnline) {
-        await fetch(`${PHONE_BRIDGE_URL}/text`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
-        });
-        return NextResponse.json({ success: true, message: `Docker ADB typed: "${text}"` });
+    if (action === 'type') {
+      if (typeof text !== 'string' || text.length === 0) {
+        return NextResponse.json({ success: false, error: 'text is required' }, { status: 400 });
       }
-
-      const escaped = text.replace(/"/g, '\\"').replace(/\s/g, '%s');
-      await execAsync(`${getAdbPrefix()} shell input text "${escaped}"`);
-      return NextResponse.json({ success: true, message: `Real ADB typed: "${text}"` });
+      const result = await adb.typeText(text);
+      return NextResponse.json({ success: result.success, message: result.output || result.command });
     }
 
-    // Hardware key
-    if (action === 'key' && keyCode) {
-      const keyMap: Record<string, number> = {
-        HOME: 3,
-        BACK: 4,
-        RECENT_APPS: 187,
-        POWER: 26,
-        VOLUME_UP: 24,
-        VOLUME_DOWN: 25,
-        ENTER: 66,
-      };
-      const code = keyMap[keyCode] || 3;
-
-      if (isDockerBridgeOnline) {
-        await fetch(`${PHONE_BRIDGE_URL}/key`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code }),
-        });
-        return NextResponse.json({ success: true, message: `Docker ADB keyevent ${code} (${keyCode})` });
+    if (action === 'key') {
+      if (!VALID_KEYS.includes(keyCode)) {
+        return NextResponse.json(
+          { success: false, error: `keyCode must be one of: ${VALID_KEYS.join(', ')}` },
+          { status: 400 }
+        );
       }
-
-      await execAsync(`${getAdbPrefix()} shell input keyevent ${code}`);
-      return NextResponse.json({ success: true, message: `Real ADB keyevent ${code} (${keyCode})` });
+      const result = await adb.pressKey(keyCode as PhoneKeyCode);
+      return NextResponse.json({ success: result.success, message: result.output || result.command });
     }
 
-    // Launch package
-    if (action === 'launch' && packageName) {
-      if (isDockerBridgeOnline) {
-        await fetch(`${PHONE_BRIDGE_URL}/launch`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ package: packageName }),
-        });
-        return NextResponse.json({ success: true, message: `Docker ADB launched package: ${packageName}` });
+    if (action === 'launch') {
+      if (typeof packageName !== 'string' || !isValidPackageName(packageName)) {
+        return NextResponse.json({ success: false, error: 'Invalid package name' }, { status: 400 });
       }
-
-      await execAsync(`${getAdbPrefix()} shell monkey -p ${packageName} 1`);
-      return NextResponse.json({ success: true, message: `Real ADB launched package: ${packageName}` });
-    }
-
-    // Install APK
-    if (action === 'install' && apkPath) {
-      const { stdout, stderr } = await execAsync(`${getAdbPrefix()} install -r "${apkPath}"`);
-      return NextResponse.json({ success: true, message: stdout || stderr });
+      const result = await adb.launchPackage(packageName);
+      return NextResponse.json({ success: result.success, message: result.output || result.command });
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error: unknown) {
-    return NextResponse.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'ADB action failed',
-    });
+    return adbErrorResponse(error);
   }
 }

@@ -1,25 +1,39 @@
-# 🧠 OpenBot Integrated Local Model Weights Engine
+# 🧠 OpenBot Local Model Weights
 
-OpenBot includes a first-class **On-Device Inference & Local Weight System** (`@openbot/core/local-weights`).
+OpenBot includes a local weight system in `@openbot/core/local-weights`
+(`packages/core/src/local-weights/index.ts`) with two parts:
 
-Instead of forcing users to install third-party command line utilities or pay high API token bills, OpenBot allows apps to directly download, cache, and execute quantized weights in-process.
+1. **`ModelWeightManager`** — downloads, verifies, and catalogs GGUF weights
+   on disk.
+2. **`LocalWeightInferenceAdapter`** — runs inference on those weights
+   through a local Ollama server.
 
----
-
-## 1. Supported Model Weight Formats
-
-1. **GGUF (GPT-Generated Unified Format)**:
-   - Primary format for Desktop (Tauri/Node) and Mobile apps.
-   - Powered by `llama.cpp` and `node-llama-cpp` bindings.
-   - Supports CPU AVX2/AVX-512, Apple Silicon Metal, NVIDIA CUDA, and Vulkan acceleration.
-2. **WebGPU / WebLLM**:
-   - Primary format for Browser & Web app (`apps/web`).
-   - Runs directly inside Chrome / Edge / Firefox using WebGPU compute shaders.
-   - Zero installation required.
-3. **ONNX / SafeTensors**:
-   - Used for auxiliary tasks: Whisper speech-to-text, sentence embeddings, and OCR vision models.
+> **How inference actually works:** OpenBot does **not** embed an in-process
+> llama.cpp / node-llama-cpp runtime. Downloaded GGUF files are registered
+> with your local Ollama server (`POST /api/create` with a
+> `FROM <path>` Modelfile) and served via `/api/chat`. This keeps prompts
+> 100% on-device while reusing Ollama's optimized runtimes (CPU, Metal,
+> CUDA, Vulkan). If Ollama is not running or a weight is not installed,
+> inference calls fail with the real error — responses are never fabricated.
 
 ---
+
+## 1. Downloads (real, resumable, verified)
+
+`startDownload(modelId)`:
+
+- Streams the file from the catalog URL to `.openbot_models/<id>.gguf.part`.
+- Resumes interrupted downloads with an HTTP `Range` request when a `.part`
+  file exists.
+- Emits live progress (bytes, %, speed, ETA) via `onDownloadProgress`.
+- Verifies the finished file with SHA-256 (against the catalog checksum when
+  one is published; the computed digest is always recorded in
+  `.openbot_models/manifest.json`) and atomically renames it into place.
+- `deleteModel(modelId)` removes the file and its manifest entry.
+
+Downloads respect Zero-Cloud mode: with the guard enabled, remote weight
+URLs are blocked like any other non-local egress (download weights *before*
+going offline).
 
 ## 2. Curated Weight Catalog
 
@@ -31,14 +45,25 @@ Instead of forcing users to install third-party command line utilities or pay hi
 | `llama-3.2-3b-instruct-q4` | 3B | Q4_K_M | **2.02 GB** | Balanced Mobile & Laptop General Agent | 6 GB RAM, 3 GB VRAM |
 | `smollm2-1.7b-instruct-q4` | 1.7B | Q4_K_M | **1.04 GB** | Compact Embedded & Low-Resource | 4 GB RAM, 1.5 GB VRAM |
 | `deepseek-r1-distill-qwen-7b-q4` | 7B | Q4_K_M | **4.68 GB** | Frontier Competition-Level Logic | 16 GB RAM, 6 GB VRAM |
-| `whisper-base-voice` | 74M | Q5_K_M | **142 MB** | On-Device Speech-to-Text | 2 GB RAM |
+| `whisper-base-voice` | 74M | Q5_K_M | **142 MB** | On-Device Speech-to-Text (whisper.cpp format) | 2 GB RAM |
 
----
+`detectHardware()` reads the real OS memory/CPU in Node (or
+`navigator` + WebGPU in browsers) and recommends a catalog model that fits.
 
-## 3. How Zero-Cloud Mode Works
+## 3. Inference Flow
 
-When Zero-Cloud mode is activated:
-1. The model router intercepts every prompt and diverts execution to `LocalWeightInferenceAdapter`.
-2. Model weights are mapped directly into system memory or GPU buffers.
-3. Prompt tokens, conversation context, and reasoning traces never leave the host device.
-4. Token generation cost is **$0.00**.
+```
+LocalWeightInferenceAdapter.complete({ model: 'local:<catalog-id>', ... })
+  → ensureOllamaModel(id)
+      → GET  /api/tags            (is it already in Ollama?)
+      → POST /api/create          (FROM <downloaded .gguf path>, first use only)
+  → POST /api/chat                (stream or non-stream)
+  → CompletionResult { content, usage from Ollama counters, costUsd: 0 }
+```
+
+## 4. Zero-Cloud Mode
+
+With Zero-Cloud on, the model router only allows local providers (Ollama /
+LM Studio / local weights) and the egress guard blocks every non-local URL.
+Prompt tokens, conversation context, and reasoning traces never leave the
+host device, and per-token cost is **$0.00** for local inference.

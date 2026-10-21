@@ -1,12 +1,37 @@
 /**
  * BYOK API Keys Service — Encrypted storage for user API keys
+ *
+ * Encryption: AES-256-GCM (authenticated) with a random 12-byte IV per key.
+ * The master secret comes from the ENCRYPTION_KEY environment variable and
+ * is hashed to a 32-byte key with SHA-256. There is NO built-in fallback
+ * secret: if ENCRYPTION_KEY is unset, key operations fail loudly instead of
+ * silently encrypting with a public constant.
+ *
+ * Legacy values written by the old AES-256-CBC scheme (`ivHex:cipherHex`)
+ * are still decryptable so existing installs keep working; they are
+ * transparently re-encrypted to GCM on the next save.
  */
 
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, InternalServerErrorException } from '@nestjs/common';
 import * as crypto from 'crypto';
 import type { PrismaClient } from '@openbot/database';
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'openbot-32-byte-encryption-key!!'; // Must be 32 bytes
+function masterKey(): Buffer {
+  const secret = process.env.ENCRYPTION_KEY;
+  if (!secret) {
+    throw new InternalServerErrorException(
+      'ENCRYPTION_KEY environment variable is not set. Refusing to store or read API keys without a real encryption secret.'
+    );
+  }
+  return crypto.createHash('sha256').update(secret, 'utf8').digest();
+}
+
+function legacyKey(): Buffer {
+  // Only used to decrypt values written before the GCM migration, which were
+  // encrypted with the historical default when ENCRYPTION_KEY was unset.
+  const secret = process.env.ENCRYPTION_KEY || 'openbot-32-byte-encryption-key!!';
+  return Buffer.from(secret.padEnd(32, ' ').slice(0, 32), 'utf-8');
+}
 
 @Injectable()
 export class KeysService {
@@ -71,19 +96,30 @@ export class KeysService {
 
   // ─── Encryption Helpers ───────────────────────────────────
 
+  /** AES-256-GCM. Output format: `v2:<iv b64>:<authTag b64>:<ciphertext b64>` */
   private encrypt(text: string): string {
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY, 'utf-8'), iv);
-    let encrypted = cipher.update(text, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    return iv.toString('hex') + ':' + encrypted;
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', masterKey(), iv);
+    const ciphertext = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    return `v2:${iv.toString('base64')}:${authTag.toString('base64')}:${ciphertext.toString('base64')}`;
   }
 
-  private decrypt(encryptedText: string): string {
+  decrypt(encryptedText: string): string {
     try {
+      if (encryptedText.startsWith('v2:')) {
+        const [, ivB64, tagB64, dataB64] = encryptedText.split(':');
+        const decipher = crypto.createDecipheriv('aes-256-gcm', masterKey(), Buffer.from(ivB64, 'base64'));
+        decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+        return Buffer.concat([
+          decipher.update(Buffer.from(dataB64, 'base64')),
+          decipher.final(),
+        ]).toString('utf8');
+      }
+      // Legacy AES-256-CBC (`ivHex:cipherHex`) written by the previous scheme.
       const [ivHex, encrypted] = encryptedText.split(':');
       const iv = Buffer.from(ivHex, 'hex');
-      const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY, 'utf-8'), iv);
+      const decipher = crypto.createDecipheriv('aes-256-cbc', legacyKey(), iv);
       let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
       return decrypted;

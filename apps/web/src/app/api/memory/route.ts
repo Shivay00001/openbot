@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
           lessonsLearned: evaluation.critique.recommendations,
         },
         tags: ['autonomous-task'],
-        startedAt: Date.now() - 3000,
+        startedAt: Date.now(),
       });
 
       const playbook = reinforcement.distillToPlaybook(episode);

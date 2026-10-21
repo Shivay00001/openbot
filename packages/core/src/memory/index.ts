@@ -11,9 +11,12 @@
 
 import { v4 as uuid } from 'uuid';
 import type { Memory, MemoryCategory, Message } from '../types/index.js';
+import { TfIdfIndex } from './vector.js';
 
 export * from './types.js';
+export { TfIdfIndex, tokenize } from './vector.js';
 export { EpisodicMemoryEngine } from './episodic-memory.js';
+export type { EpisodicMemoryOptions } from './episodic-memory.js';
 export { IndexedDBMemoryStore } from './indexeddb-store.js';
 export { DiskMemoryStore } from './disk-store.js';
 export { CloudPrismaMemoryStore } from './cloud-prisma-store.js';
@@ -39,30 +42,25 @@ export interface MemoryStore {
 
 export class InMemoryStore implements MemoryStore {
   private memories: Map<string, Memory> = new Map();
+  private index = new TfIdfIndex();
 
   async save(memory: Memory): Promise<void> {
     this.memories.set(memory.id, memory);
+    this.index.add(memory.id, memory.content);
   }
 
+  /** TF-IDF cosine-similarity search over memory contents. */
   async search(query: string, userId: string, limit = 10): Promise<Memory[]> {
-    const queryLower = query.toLowerCase();
-    const userMemories = Array.from(this.memories.values())
-      .filter((m) => m.userId === userId);
-
-    // Simple keyword matching (replace with vector search in production)
-    const scored = userMemories.map((m) => {
-      const content = m.content.toLowerCase();
-      const words = queryLower.split(/\s+/);
-      const matchCount = words.filter((w) => content.includes(w)).length;
-      const score = matchCount / words.length;
-      return { memory: m, score };
-    });
-
-    return scored
-      .filter((s) => s.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-      .map((s) => s.memory);
+    const ranked = this.index.search(query, Math.max(limit * 4, limit));
+    const results: Memory[] = [];
+    for (const { id } of ranked) {
+      const memory = this.memories.get(id);
+      if (memory && memory.userId === userId) {
+        results.push(memory);
+        if (results.length >= limit) break;
+      }
+    }
+    return results;
   }
 
   async getByCategory(userId: string, category: MemoryCategory, limit = 20): Promise<Memory[]> {
@@ -74,6 +72,7 @@ export class InMemoryStore implements MemoryStore {
 
   async delete(id: string): Promise<void> {
     this.memories.delete(id);
+    this.index.remove(id);
   }
 
   async getAll(userId: string, limit = 100): Promise<Memory[]> {

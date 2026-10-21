@@ -58,8 +58,8 @@ export class BrowserAutomationEngine {
 
     const initialTab: BrowserTab = {
       id: uuid(),
-      url: 'https://duckduckgo.com',
-      title: 'DuckDuckGo — Privacy, simplified.',
+      url: 'about:blank',
+      title: 'New Tab',
       isLoading: false,
       canGoBack: false,
       canGoForward: false,
@@ -162,7 +162,8 @@ export class BrowserAutomationEngine {
 
     if (tab) {
       tab.url = result.currentUrl || url;
-      tab.title = this.extractTitle(tab.url);
+      // Use the real title reported by the engine; never invent one.
+      if (result.pageTitle) tab.title = result.pageTitle;
       tab.isLoading = false;
     }
 
@@ -193,12 +194,4 @@ export class BrowserAutomationEngine {
     return this.currentAdapter.captureScreenshot();
   }
 
-  private extractTitle(url: string): string {
-    try {
-      const host = new URL(url).hostname;
-      return host.replace('www.', '').toUpperCase() + ' — Live Workspace';
-    } catch {
-      return 'Web Document';
-    }
-  }
 }

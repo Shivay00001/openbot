@@ -2,7 +2,8 @@
   "name": "@openbot/core",
   "version": "0.1.0",
   "private": true,
-  "description": "OpenBot shared core — agent loop, model router, tools, memory, phone mode, desktop mode, local weights",
+  "type": "module",
+  "description": "OpenBot shared core \u2014 agent loop, model router, tools, memory, phone mode, desktop mode, local weights",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -21,6 +22,10 @@
     "./local-weights": {
       "import": "./dist/local-weights/index.js",
       "types": "./dist/local-weights/index.d.ts"
+    },
+    "./local-weights/catalog": {
+      "import": "./dist/local-weights/catalog.js",
+      "types": "./dist/local-weights/catalog.d.ts"
     },
     "./phone": {
       "import": "./dist/phone/index.js",
@@ -72,11 +77,14 @@
   },
   "dependencies": {
     "openai": "^4.80.0",
+    "playwright": "^1.49.0",
+    "puppeteer-core": "^23.0.0",
     "zod": "^3.24.0",
     "uuid": "^11.0.0",
     "eventemitter3": "^5.0.1"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "@types/uuid": "^10.0.0",
     "rimraf": "^6.0.0",
     "typescript": "^5.7.0",

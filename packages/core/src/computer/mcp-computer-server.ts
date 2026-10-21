@@ -170,6 +170,18 @@ export class McpComputerServer {
    * Handle incoming MCP tool call
    */
   async handleMcpToolCall(request: McpToolRequest): Promise<McpToolResponse> {
+    try {
+      return await this.dispatch(request);
+    } catch (err: any) {
+      return {
+        toolCallId: request.id,
+        content: [{ type: 'text', text: `MCP tool ${request.name} failed: ${err.message}` }],
+        isError: true,
+      };
+    }
+  }
+
+  private async dispatch(request: McpToolRequest): Promise<McpToolResponse> {
     const args = request.arguments || {};
 
     switch (request.name) {
@@ -249,7 +261,9 @@ export class McpComputerServer {
           code: String(args.code || ''),
           cwd: args.cwd ? String(args.cwd) : undefined,
         });
-        const output = result.stderr ? `Error:\n${result.stderr}` : `Output:\n${result.stdout}`;
+        const output = [result.stdout ? `Output:\n${result.stdout}` : '', result.stderr ? `Stderr:\n${result.stderr}` : '']
+          .filter(Boolean)
+          .join('\n') || '(no output)';
         return {
           toolCallId: request.id,
           content: [

@@ -97,6 +97,8 @@ export interface BrowserActionResult {
   success: boolean;
   message: string;
   currentUrl?: string;
+  /** Real page title after navigation, when the engine could read it. */
+  pageTitle?: string;
   screenshotBase64?: string;
   durationMs: number;
   error?: string;

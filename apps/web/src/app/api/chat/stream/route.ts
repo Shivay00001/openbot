@@ -9,7 +9,6 @@ export async function POST(req: NextRequest) {
       messages = [],
       model = 'deepseek-r1-distill-qwen-1.5b-q4',
       isZeroCloud = true,
-      apiKeys = {},
     } = await req.json();
 
     if (!message || typeof message !== 'string') {
@@ -20,22 +19,27 @@ export async function POST(req: NextRequest) {
     }
 
     const encoder = new TextEncoder();
+    const ollamaModel = model.includes('deepseek') ? 'deepseek-r1:1.5b' : 'qwen2.5:0.5b';
 
     const stream = new ReadableStream({
       async start(controller) {
-        // Send initial connection event
         controller.enqueue(
           encoder.encode(`event: start\ndata: ${JSON.stringify({ model, isZeroCloud })}\n\n`)
         );
 
-        // Check if Ollama is accessible
-        let streamFinished = false;
+        const emitError = (text: string) => {
+          controller.enqueue(
+            encoder.encode(`event: error\ndata: ${JSON.stringify({ error: text })}\n\n`)
+          );
+        };
+
+        let streamed = false;
         try {
           const ollamaRes = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: model.includes('deepseek') ? 'deepseek-r1:1.5b' : 'qwen2.5:0.5b',
+              model: ollamaModel,
               messages: [
                 { role: 'system', content: 'You are OpenBot, a universal autonomous AI agent.' },
                 ...messages.slice(-4),
@@ -45,7 +49,12 @@ export async function POST(req: NextRequest) {
             }),
           });
 
-          if (ollamaRes.ok && ollamaRes.body) {
+          if (!ollamaRes.ok) {
+            const detail = await ollamaRes.text().catch(() => '');
+            emitError(
+              `Ollama at ${OLLAMA_BASE_URL} returned HTTP ${ollamaRes.status} for model "${ollamaModel}". ${detail.slice(0, 300)} Pull the model with \`ollama pull ${ollamaModel}\` or choose a different model.`
+            );
+          } else if (ollamaRes.body) {
             const reader = ollamaRes.body.getReader();
             const decoder = new TextDecoder();
 
@@ -61,42 +70,31 @@ export async function POST(req: NextRequest) {
                 try {
                   const parsed = JSON.parse(line);
                   if (parsed.message?.content) {
+                    streamed = true;
                     controller.enqueue(
                       encoder.encode(
                         `event: token\ndata: ${JSON.stringify({ content: parsed.message.content })}\n\n`
                       )
                     );
                   }
-                  if (parsed.done) {
-                    streamFinished = true;
-                  }
                 } catch {
-                  // Non-JSON line
+                  // Non-JSON keep-alive line
                 }
               }
             }
+            if (!streamed) {
+              emitError(`Ollama model "${ollamaModel}" returned an empty response.`);
+            }
           }
-        } catch {
-          // Ollama not reachable, fall through to synthetic streaming
-        }
-
-        // If local stream didn't finish, stream synthesized response tokens
-        if (!streamFinished) {
-          const defaultText = `I have received your goal: "${message}".\n\nOpenBot agent loop is initialized across all hardware perception & execution bridges:\n- 📱 Agentic Phone Mode (ADB on tcp:5037)\n- 💻 Desktop & PowerShell automation\n- 🌐 Universal headless browser\n- 🧠 Episodic persistent vector memory\n\nReady for your next instruction!`;
-
-          const words = defaultText.split(' ');
-          for (const word of words) {
-            controller.enqueue(
-              encoder.encode(
-                `event: token\ndata: ${JSON.stringify({ content: word + ' ' })}\n\n`
-              )
-            );
-            await new Promise((r) => setTimeout(r, 25));
-          }
+        } catch (err: unknown) {
+          // No synthetic fallback: report the real connectivity problem.
+          emitError(
+            `Local Ollama is not reachable at ${OLLAMA_BASE_URL} (${err instanceof Error ? err.message : String(err)}). Start Ollama and pull "${ollamaModel}", or use the non-streaming chat with a BYOK cloud key.`
+          );
         }
 
         controller.enqueue(
-          encoder.encode(`event: done\ndata: ${JSON.stringify({ status: 'completed' })}\n\n`)
+          encoder.encode(`event: done\ndata: ${JSON.stringify({ status: streamed ? 'completed' : 'error' })}\n\n`)
         );
         controller.close();
       },

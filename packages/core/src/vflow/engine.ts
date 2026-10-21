@@ -75,24 +75,36 @@ export class vFlowEngine {
         session.steps.push({
           nodeId: 'step_phone_msg',
           nodeType: 'action_phone',
-          status: 'completed',
+          status: res.success ? 'completed' : 'failed',
           input: intent.slots,
           output: res,
           durationMs: Date.now() - stepStart,
         });
-        session.spokenFeedback = `Message successfully sent to ${intent.slots.recipient} via ${intent.slots.app || 'WhatsApp'}.`;
+        if (!res.success) {
+          session.status = 'failed';
+          session.spokenFeedback = `Could not send the message to ${intent.slots.recipient}: ${res.message}`;
+          session.durationMs = Date.now() - start;
+          return session;
+        }
+        session.spokenFeedback = `Message successfully sent to ${intent.slots.recipient} via ${intent.slots.app || 'WhatsApp'}${res.simulated ? ' (simulated phone — no real device was used)' : ''}.`;
       } else if (intent.intentName === 'phone_make_call') {
         const stepStart = Date.now();
         const res = await this.phoneController.initiateCall(intent.slots.target);
         session.steps.push({
           nodeId: 'step_phone_call',
           nodeType: 'action_phone',
-          status: 'completed',
+          status: res.success ? 'completed' : 'failed',
           input: intent.slots,
           output: res,
           durationMs: Date.now() - stepStart,
         });
-        session.spokenFeedback = `Initiated automated call to ${intent.slots.target} for ${intent.slots.purpose}.`;
+        if (!res.success) {
+          session.status = 'failed';
+          session.spokenFeedback = `Could not start the call to ${intent.slots.target}: ${res.status}`;
+          session.durationMs = Date.now() - start;
+          return session;
+        }
+        session.spokenFeedback = `Initiated automated call to ${intent.slots.target} for ${intent.slots.purpose}${res.simulated ? ' (simulated phone — no real device was used)' : ''}.`;
       } else if (intent.intentName === 'browser_web_search') {
         const stepStart = Date.now();
         const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(intent.slots.query)}`;
@@ -100,11 +112,17 @@ export class vFlowEngine {
         session.steps.push({
           nodeId: 'step_browser_search',
           nodeType: 'action_browser',
-          status: 'completed',
+          status: res.success ? 'completed' : 'failed',
           input: { query: intent.slots.query, url: searchUrl },
           output: res,
           durationMs: Date.now() - stepStart,
         });
+        if (!res.success) {
+          session.status = 'failed';
+          session.spokenFeedback = `Browser search failed: ${res.error || 'navigation failed'}`;
+          session.durationMs = Date.now() - start;
+          return session;
+        }
         session.spokenFeedback = `Searched for ${intent.slots.query} in browser workspace.`;
       } else if (intent.intentName === 'desktop_execute_command') {
         const stepStart = Date.now();
@@ -124,7 +142,10 @@ export class vFlowEngine {
           ? `Command completed successfully.`
           : `Command finished with an error.`;
       } else {
-        session.spokenFeedback = `I heard: "${command.transcript}". Processing with universal intelligence engine.`;
+        session.status = 'failed';
+        session.spokenFeedback = `I heard: "${command.transcript}", but no executable action is wired for intent "${intent.intentName}" yet.`;
+        session.durationMs = Date.now() - start;
+        return session;
       }
 
       session.status = 'completed';

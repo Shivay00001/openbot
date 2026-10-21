@@ -2,8 +2,27 @@
 
 > **No Credit Card or Debit Card Needed**: You can host and run OpenBot 100% free with zero payment details. Every service in this stack signs up directly using **GitHub** or **Google**.
 
-See the complete guide and step-by-step instructions:
-- [free_tier_hosting_guide.md](file:///C:/Users/shiva/.gemini/antigravity-ide/brain/ed11f5f9-7bbf-4fab-a3c9-047360dfdbc4/free_tier_hosting_guide.md)
+## Option A — Free-tier Docker stack (this repo)
+
+The repo ships a minimal compose file with just the web app and its data
+services:
+
+```bash
+docker-compose -f docker-compose.free-tier.yml up -d
+```
+
+It starts:
+
+| Service | Image | Purpose |
+|---|---|---|
+| `openbot-web` | built from `apps/web` | Next.js UI + API routes |
+| `openbot-postgres` | `postgres:16-alpine` | Database (Prisma) |
+| `openbot-redis` | `redis:7-alpine` | Cache / queues |
+| `openbot-ollama` | `ollama/ollama:latest` | Local model inference (Zero-Cloud) |
+
+The full stack (including the NestJS services) is in `docker-compose.yml`.
+
+## Option B — Free cloud providers (no card)
 
 ### Verified Zero-Card Providers:
 1. **[Vercel](https://vercel.com)**: Fullstack Next.js 15 Web App + APIs (GitHub sign-in, No card).
@@ -14,4 +33,6 @@ See the complete guide and step-by-step instructions:
 6. **[Google AI Studio](https://aistudio.google.com)**: Gemini 2.0 Flash 1,500 req/day (Google sign-in, No card).
 7. **[Cloudflare Tunnels](https://developers.cloudflare.com)**: Public HTTPS URL for laptop/phone (Zero card, No port forwarding).
 
-
+A typical free deployment: web app on Vercel, PostgreSQL on Neon or Supabase,
+inference via Groq / Google AI Studio keys added in Settings → API Keys, and
+a Cloudflare Tunnel if you want to expose a home machine's Ollama securely.

@@ -1,14 +1,17 @@
 /**
  * Android Debug Bridge (ADB) Protocol Controller 📱🔧
- * Production-grade hardware & emulator bridge for physical Android devices via USB or Wi-Fi TCP/IP.
- * Supports direct host ADB execution and Dockerized phone-bridge daemon (ADB_HOST, ADB_PORT).
+ * Real hardware bridge for physical Android devices via USB or Wi-Fi TCP/IP.
+ * Every operation executes the actual `adb` binary with argv arrays (never a
+ * shell string, so device/user input cannot inject commands). When ADB or a
+ * device is unavailable, methods return/throw the real error — no simulated
+ * screenshots, no fake UI trees.
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { PhoneElementNode, PhoneKeyCode } from './index.js';
+import type { PhoneKeyCode } from './index.js';
 
-const execAsync = typeof exec === 'function' ? promisify(exec) : async () => ({ stdout: '', stderr: 'child_process unavailable' });
+const execFileAsync = promisify(execFile);
 
 export interface AdbDevice {
   serial: string;
@@ -18,48 +21,70 @@ export interface AdbDevice {
   ipAddress?: string;
 }
 
-export interface AdbControllerOptions {
-  host?: string;
-  port?: number;
-  deviceSerial?: string;
+export interface AdbCommandResult {
+  success: boolean;
+  command: string;
+  output?: string;
+}
+
+export class AdbUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AdbUnavailableError';
+  }
+}
+
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+const HOSTNAME = /^[a-zA-Z0-9._-]+$/;
+const PACKAGE_NAME = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
+
+export function isValidPackageName(name: string): boolean {
+  return PACKAGE_NAME.test(name);
 }
 
 export class AdbController {
   private activeDeviceSerial?: string;
   private connectedDevices: AdbDevice[] = [];
-  private isAdbAvailable = false;
-  private adbHost?: string;
-  private adbPort?: number;
 
-  constructor(options?: AdbControllerOptions) {
-    this.adbHost = options?.host || process.env.ADB_HOST;
-    this.adbPort = options?.port || (process.env.ADB_PORT ? parseInt(process.env.ADB_PORT, 10) : undefined);
-    this.activeDeviceSerial = options?.deviceSerial || process.env.ADB_DEVICE_SERIAL;
-    this.checkAdbInstallation();
+  private args(...rest: string[]): string[] {
+    return this.activeDeviceSerial ? ['-s', this.activeDeviceSerial, ...rest] : rest;
   }
 
-  /**
-   * Helper to build the ADB command with host/port and target device flags
-   */
-  private getAdbCmd(subCmd: string): string {
-    let base = 'adb';
-    if (this.adbHost) {
-      base += ` -H ${this.adbHost}`;
-      if (this.adbPort) base += ` -P ${this.adbPort}`;
-    }
-    if (this.activeDeviceSerial) {
-      base += ` -s ${this.activeDeviceSerial}`;
-    }
-    return `${base} ${subCmd}`.trim();
+  private display(args: string[]): string {
+    return `adb ${args.join(' ')}`;
   }
 
-  private async checkAdbInstallation(): Promise<boolean> {
+  /** Run adb with argv; throws AdbUnavailableError with the real stderr on failure. */
+  async run(argv: string[], options?: { maxBuffer?: number }): Promise<string> {
     try {
-      const { stdout } = await execAsync(this.getAdbCmd('version'));
-      this.isAdbAvailable = stdout.includes('Android Debug Bridge');
-      return this.isAdbAvailable;
+      const { stdout } = await execFileAsync('adb', argv, {
+        maxBuffer: options?.maxBuffer || 10 * 1024 * 1024,
+        timeout: 30000,
+      });
+      return stdout as string;
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        throw new AdbUnavailableError(
+          'adb binary not found on PATH. Install Android platform-tools to use Agentic Phone Mode over ADB.'
+        );
+      }
+      const stderr = (err.stderr || '').toString().trim();
+      throw new AdbUnavailableError(
+        `adb ${argv.join(' ')} failed: ${stderr || err.message}`
+      );
+    }
+  }
+
+  /** Run an `adb shell` command on the active device. */
+  async shell(shellArgs: string[]): Promise<string> {
+    return this.run(this.args('shell', ...shellArgs));
+  }
+
+  async isAdbAvailable(): Promise<boolean> {
+    try {
+      const stdout = await this.run(['version']);
+      return stdout.includes('Android Debug Bridge');
     } catch {
-      this.isAdbAvailable = false;
       return false;
     }
   }
@@ -68,30 +93,26 @@ export class AdbController {
    * Discover and list connected physical Android devices and emulators
    */
   async listDevices(): Promise<AdbDevice[]> {
-    try {
-      const { stdout } = await execAsync(this.getAdbCmd('devices -l'));
-      const lines = stdout.split('\n').filter((l) => l.trim() && !l.startsWith('*') && !l.startsWith('List of'));
-      
-      this.connectedDevices = lines.map((line) => {
-        const parts = line.trim().split(/\s+/);
-        const serial = parts[0];
-        const state = (parts[1] as any) || 'device';
-        const modelMatch = line.match(/model:([^\s]+)/);
-        const productMatch = line.match(/product:([^\s]+)/);
-        return {
-          serial,
-          state,
-          model: modelMatch ? modelMatch[1] : 'Android Device',
-          product: productMatch ? productMatch[1] : 'generic',
-          ipAddress: serial.includes(':') ? serial.split(':')[0] : undefined,
-        };
-      });
+    const stdout = await this.run(['devices', '-l']);
+    const lines = stdout.split('\n').filter((l) => l.trim() && !l.startsWith('*') && !l.startsWith('List of'));
 
-      if (this.connectedDevices.length > 0 && !this.activeDeviceSerial) {
-        this.activeDeviceSerial = this.connectedDevices[0].serial;
-      }
-    } catch {
-      this.connectedDevices = [];
+    this.connectedDevices = lines.map((line) => {
+      const parts = line.trim().split(/\s+/);
+      const serial = parts[0];
+      const state = (parts[1] as AdbDevice['state']) || 'device';
+      const modelMatch = line.match(/model:([^\s]+)/);
+      const productMatch = line.match(/product:([^\s]+)/);
+      return {
+        serial,
+        state,
+        model: modelMatch ? modelMatch[1] : 'Android Device',
+        product: productMatch ? productMatch[1] : 'generic',
+        ipAddress: serial.includes(':') ? serial.split(':')[0] : undefined,
+      };
+    });
+
+    if (this.connectedDevices.length > 0 && !this.activeDeviceSerial) {
+      this.activeDeviceSerial = this.connectedDevices[0].serial;
     }
 
     return this.connectedDevices;
@@ -101,10 +122,14 @@ export class AdbController {
    * Connect to Android device over Wi-Fi TCP/IP
    */
   async connectTcp(ipAddress: string, port = 5555): Promise<{ success: boolean; message: string }> {
+    if (!IPV4.test(ipAddress) && !HOSTNAME.test(ipAddress)) {
+      return { success: false, message: `Invalid IP address or hostname: "${ipAddress}"` };
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return { success: false, message: `Invalid port: ${port}` };
+    }
     try {
-      const cmd = this.getAdbCmd(`connect ${ipAddress}:${port}`);
-      const { stdout, stderr } = await execAsync(cmd);
-      const output = (stdout || stderr).trim();
+      const output = (await this.run(['connect', `${ipAddress}:${port}`])).trim();
       const success = output.includes('connected to');
       if (success) {
         this.activeDeviceSerial = `${ipAddress}:${port}`;
@@ -116,9 +141,6 @@ export class AdbController {
     }
   }
 
-  /**
-   * Select active target device serial
-   */
   selectDevice(serial: string): void {
     this.activeDeviceSerial = serial;
   }
@@ -127,50 +149,49 @@ export class AdbController {
     return this.activeDeviceSerial;
   }
 
-  /**
-   * Real screen coordinate tap via `adb shell input tap x y`
-   */
-  async tap(x: number, y: number): Promise<{ success: boolean; command: string; output?: string }> {
-    const cmd = this.getAdbCmd(`shell input tap ${Math.round(x)} ${Math.round(y)}`);
+  private async inputResult(argv: string[]): Promise<AdbCommandResult> {
+    const full = this.args('shell', 'input', ...argv);
     try {
-      const { stdout } = await execAsync(cmd);
-      return { success: true, command: cmd, output: stdout };
+      const output = await this.run(full);
+      return { success: true, command: this.display(full), output };
     } catch (err: any) {
-      return { success: false, command: cmd, output: err.message };
+      return { success: false, command: this.display(full), output: err.message };
     }
   }
 
-  /**
-   * Real swipe/fling via `adb shell input swipe x1 y1 x2 y2 duration`
-   */
-  async swipe(fromX: number, fromY: number, toX: number, toY: number, durationMs = 300): Promise<{ success: boolean; command: string; output?: string }> {
-    const cmd = this.getAdbCmd(`shell input swipe ${Math.round(fromX)} ${Math.round(fromY)} ${Math.round(toX)} ${Math.round(toY)} ${durationMs}`);
-    try {
-      const { stdout } = await execAsync(cmd);
-      return { success: true, command: cmd, output: stdout };
-    } catch (err: any) {
-      return { success: false, command: cmd, output: err.message };
-    }
+  /** Real screen coordinate tap via `adb shell input tap x y` */
+  async tap(x: number, y: number): Promise<AdbCommandResult> {
+    return this.inputResult(['tap', String(Math.round(x)), String(Math.round(y))]);
   }
 
-  /**
-   * Real text input via `adb shell input text`
-   */
-  async typeText(text: string): Promise<{ success: boolean; command: string; output?: string }> {
-    const escaped = text.replace(/"/g, '\\"').replace(/\s/g, '%s');
-    const cmd = this.getAdbCmd(`shell input text "${escaped}"`);
-    try {
-      const { stdout } = await execAsync(cmd);
-      return { success: true, command: cmd, output: stdout };
-    } catch (err: any) {
-      return { success: false, command: cmd, output: err.message };
-    }
+  /** Real swipe/fling via `adb shell input swipe x1 y1 x2 y2 duration` */
+  async swipe(fromX: number, fromY: number, toX: number, toY: number, durationMs = 300): Promise<AdbCommandResult> {
+    return this.inputResult([
+      'swipe',
+      String(Math.round(fromX)), String(Math.round(fromY)),
+      String(Math.round(toX)), String(Math.round(toY)),
+      String(Math.round(durationMs)),
+    ]);
   }
 
-  /**
-   * Real hardware/navigation key event via `adb shell input keyevent`
-   */
-  async pressKey(key: PhoneKeyCode): Promise<{ success: boolean; command: string; output?: string }> {
+  /** Real text input via `adb shell input text` (%s encodes spaces) */
+  async typeText(text: string): Promise<AdbCommandResult> {
+    const encoded = text
+      .replace(/%/g, '\\%')
+      .replace(/ /g, '%s')
+      .replace(/"/g, '\\"')
+      .replace(/'/g, "\\'")
+      .replace(/\(/g, '\\(')
+      .replace(/\)/g, '\\)')
+      .replace(/&/g, '\\&')
+      .replace(/</g, '\\<')
+      .replace(/>/g, '\\>')
+      .replace(/;/g, '\\;');
+    return this.inputResult(['text', encoded]);
+  }
+
+  /** Real hardware/navigation key event via `adb shell input keyevent` */
+  async pressKey(key: PhoneKeyCode): Promise<AdbCommandResult> {
     const keyMap: Record<PhoneKeyCode, number> = {
       HOME: 3,
       BACK: 4,
@@ -180,134 +201,96 @@ export class AdbController {
       VOLUME_DOWN: 25,
       ENTER: 66,
     };
-    const code = keyMap[key] || 3;
-    const cmd = this.getAdbCmd(`shell input keyevent ${code}`);
+    return this.inputResult(['keyevent', String(keyMap[key] || 3)]);
+  }
+
+  /** Real application launch via monkey (validates the package name first) */
+  async launchPackage(packageName: string): Promise<AdbCommandResult> {
+    if (!isValidPackageName(packageName)) {
+      return { success: false, command: '', output: `Invalid package name: "${packageName}"` };
+    }
+    const full = this.args('shell', 'monkey', '-p', packageName, '1');
     try {
-      const { stdout } = await execAsync(cmd);
-      return { success: true, command: cmd, output: stdout };
+      const output = await this.run(full);
+      return { success: true, command: this.display(full), output };
     } catch (err: any) {
-      return { success: false, command: cmd, output: err.message };
+      return { success: false, command: this.display(full), output: err.message };
+    }
+  }
+
+  /** Start an Android activity via `am start` with explicit argv (intents, deep links). */
+  async startActivity(amArgs: string[]): Promise<AdbCommandResult> {
+    const full = this.args('shell', 'am', 'start', ...amArgs);
+    try {
+      const output = await this.run(full);
+      const failed = /Error|Exception|does not exist/i.test(output);
+      return { success: !failed, command: this.display(full), output: output.trim() };
+    } catch (err: any) {
+      return { success: false, command: this.display(full), output: err.message };
     }
   }
 
   /**
-   * Real application launch via monkey/am start
+   * Real screenshot capture via `adb exec-out screencap -p`.
+   * Returns a failure result (never a placeholder image) when capture fails.
    */
-  async launchPackage(packageName: string): Promise<{ success: boolean; command: string; output?: string }> {
-    const cmd = this.getAdbCmd(`shell monkey -p ${packageName} 1`);
+  async captureScreenshot(): Promise<{ success: boolean; dataUrl?: string; error?: string }> {
     try {
-      const { stdout } = await execAsync(cmd);
-      return { success: true, command: cmd, output: stdout };
-    } catch (err: any) {
-      return { success: false, command: cmd, output: err.message };
-    }
-  }
-
-  /**
-   * Real screenshot capture via `adb exec-out screencap -p`
-   */
-  async captureScreenshot(): Promise<string> {
-    const cmd = this.getAdbCmd('exec-out screencap -p');
-    try {
-      const { stdout } = await execAsync(cmd, {
-        encoding: 'base64',
+      const { stdout } = await execFileAsync('adb', this.args('exec-out', 'screencap', '-p'), {
+        encoding: 'buffer',
         maxBuffer: 25 * 1024 * 1024,
+        timeout: 30000,
       });
-      if (stdout && stdout.length > 100) {
-        return `data:image/png;base64,${stdout.trim()}`;
+      const buffer = stdout as unknown as Buffer;
+      if (!buffer || buffer.length < 100) {
+        return { success: false, error: 'screencap returned an empty image (no device connected?)' };
       }
-    } catch {
-      // Return placeholder if device not connected
+      return { success: true, dataUrl: `data:image/png;base64,${buffer.toString('base64')}` };
+    } catch (err: any) {
+      return { success: false, error: err.message };
     }
-    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
   }
 
   /**
-   * Real UIAutomator dump and node tree parsing
+   * Real UIAutomator dump. Throws with the real error when the dump fails —
+   * callers must not substitute a simulated tree.
    */
   async dumpHierarchy(): Promise<string> {
-    try {
-      await execAsync(this.getAdbCmd('shell uiautomator dump /sdcard/window_dump.xml'));
-      const { stdout } = await execAsync(this.getAdbCmd('shell cat /sdcard/window_dump.xml'));
-      return stdout;
-    } catch {
-      return `<?xml version="1.0" encoding="UTF-8"?><hierarchy rotation="0"><node index="0" text="OpenBot Phone Simulator" class="android.widget.FrameLayout" bounds="[0,0][1080,2400]"/></hierarchy>`;
+    await this.shell(['uiautomator', 'dump', '/sdcard/window_dump.xml']);
+    const xml = await this.shell(['cat', '/sdcard/window_dump.xml']);
+    if (!xml.includes('<hierarchy')) {
+      throw new AdbUnavailableError('uiautomator dump did not return a hierarchy document.');
     }
+    return xml;
   }
 
-  /**
-   * Direct APK installation onto physical device or emulator
-   */
-  async installApk(apkFilePath: string): Promise<{ success: boolean; message: string }> {
-    const cmd = this.getAdbCmd(`install -r "${apkFilePath}"`);
-    try {
-      const { stdout, stderr } = await execAsync(cmd);
-      const output = (stdout || stderr).trim();
-      return { success: output.includes('Success'), message: output };
-    } catch (err: any) {
-      return { success: false, message: err.message };
-    }
+  /** Battery level + charging state from `dumpsys battery`. */
+  async getBattery(): Promise<{ level: number; isCharging: boolean }> {
+    const output = await this.shell(['dumpsys', 'battery']);
+    const levelMatch = output.match(/level:\s*(\d+)/);
+    const statusMatch = output.match(/status:\s*(\d+)/);
+    return {
+      level: levelMatch ? Number(levelMatch[1]) : -1,
+      isCharging: statusMatch ? Number(statusMatch[1]) === 2 || Number(statusMatch[1]) === 5 : false,
+    };
   }
 
-  /**
-   * Push local file to Android device filesystem
-   */
-  async pushFile(localPath: string, remotePath: string): Promise<{ success: boolean; message: string }> {
-    const cmd = this.getAdbCmd(`push "${localPath}" "${remotePath}"`);
-    try {
-      const { stdout, stderr } = await execAsync(cmd);
-      return { success: true, message: (stdout || stderr).trim() };
-    } catch (err: any) {
-      return { success: false, message: err.message };
+  /** Foreground app package/activity from `dumpsys activity activities`. */
+  async getForegroundApp(): Promise<{ packageName: string; activityName: string }> {
+    const output = await this.shell(['dumpsys', 'activity', 'activities']);
+    const match = output.match(/topResumedActivity=ActivityRecord\{[^}]*?\s([a-zA-Z0-9_.]+)\/([a-zA-Z0-9_.$]+)/)
+      || output.match(/mResumedActivity: ActivityRecord\{[^}]*?\s([a-zA-Z0-9_.]+)\/([a-zA-Z0-9_.$]+)/);
+    if (match) {
+      return { packageName: match[1], activityName: match[2] };
     }
+    return { packageName: 'unknown', activityName: 'unknown' };
   }
 
-  /**
-   * Pull remote file from Android device to local filesystem
-   */
-  async pullFile(remotePath: string, localPath: string): Promise<{ success: boolean; message: string }> {
-    const cmd = this.getAdbCmd(`pull "${remotePath}" "${localPath}"`);
-    try {
-      const { stdout, stderr } = await execAsync(cmd);
-      return { success: true, message: (stdout || stderr).trim() };
-    } catch (err: any) {
-      return { success: false, message: err.message };
-    }
-  }
-
-  /**
-   * Screen resolution query
-   */
-  async getScreenResolution(): Promise<{ width: number; height: number }> {
-    try {
-      const { stdout } = await execAsync(this.getAdbCmd('shell wm size'));
-      const match = stdout.match(/Physical size:\s*(\d+)x(\d+)/i) || stdout.match(/(\d+)x(\d+)/);
-      if (match) {
-        return { width: parseInt(match[1], 10), height: parseInt(match[2], 10) };
-      }
-    } catch {
-      // fallback
-    }
-    return { width: 1080, height: 2400 };
-  }
-
-  /**
-   * Wake up physical device screen
-   */
-  async wakeUp(): Promise<boolean> {
-    try {
-      await execAsync(this.getAdbCmd('shell input keyevent 224'));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Direct live video/screen stream URL from Docker Phone Bridge or local ws-scrcpy
-   */
-  getLiveStreamUrl(): string {
-    const host = this.adbHost || 'localhost';
-    return `http://${host}:8000/stream`;
+  /** Screen size from `wm size`. */
+  async getScreenSize(): Promise<{ width: number; height: number }> {
+    const output = await this.shell(['wm', 'size']);
+    const match = output.match(/(\d+)x(\d+)/);
+    if (match) return { width: Number(match[1]), height: Number(match[2]) };
+    return { width: 0, height: 0 };
   }
 }

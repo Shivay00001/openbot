@@ -9,6 +9,7 @@ import * as path from 'path';
 import type { Memory, MemoryCategory } from '../types/index.js';
 import type { MemoryStore } from './index.js';
 import type { EpisodicMemoryEpisode, ProceduralSkillTrajectory } from './types.js';
+import { TfIdfIndex } from './vector.js';
 
 export class DiskMemoryStore implements MemoryStore {
   private baseDir: string;
@@ -18,6 +19,7 @@ export class DiskMemoryStore implements MemoryStore {
   private memories: Map<string, Memory> = new Map();
   private episodes: Map<string, EpisodicMemoryEpisode> = new Map();
   private playbooks: Map<string, ProceduralSkillTrajectory> = new Map();
+  private memoryIndex = new TfIdfIndex();
 
   constructor(customDir?: string) {
     this.baseDir = customDir || path.resolve(process.cwd ? process.cwd() : '.', '.openbot_data');
@@ -39,6 +41,7 @@ export class DiskMemoryStore implements MemoryStore {
         list.forEach((m) => {
           m.createdAt = new Date(m.createdAt);
           this.memories.set(m.id, m);
+          this.memoryIndex.add(m.id, m.content);
         });
       }
 
@@ -81,25 +84,22 @@ export class DiskMemoryStore implements MemoryStore {
 
   async save(memory: Memory): Promise<void> {
     this.memories.set(memory.id, memory);
+    this.memoryIndex.add(memory.id, memory.content);
     this.persistMemories();
   }
 
+  /** TF-IDF cosine-similarity search over memory contents. */
   async search(query: string, userId: string, limit = 10): Promise<Memory[]> {
-    const queryLower = query.toLowerCase();
-    const userMemories = Array.from(this.memories.values()).filter((m) => m.userId === userId);
-
-    return userMemories
-      .map((m) => {
-        const content = m.content.toLowerCase();
-        const words = queryLower.split(/\s+/);
-        const matchCount = words.filter((w) => content.includes(w)).length;
-        const score = matchCount / (words.length || 1);
-        return { memory: m, score };
-      })
-      .filter((s) => s.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-      .map((s) => s.memory);
+    const ranked = this.memoryIndex.search(query, Math.max(limit * 4, limit));
+    const results: Memory[] = [];
+    for (const { id } of ranked) {
+      const memory = this.memories.get(id);
+      if (memory && memory.userId === userId) {
+        results.push(memory);
+        if (results.length >= limit) break;
+      }
+    }
+    return results;
   }
 
   async getByCategory(userId: string, category: MemoryCategory, limit = 20): Promise<Memory[]> {
@@ -111,6 +111,7 @@ export class DiskMemoryStore implements MemoryStore {
 
   async delete(id: string): Promise<void> {
     this.memories.delete(id);
+    this.memoryIndex.remove(id);
     this.persistMemories();
   }
 
@@ -126,6 +127,11 @@ export class DiskMemoryStore implements MemoryStore {
   async saveEpisode(episode: EpisodicMemoryEpisode): Promise<void> {
     this.episodes.set(episode.id, episode);
     this.persistEpisodes();
+  }
+
+  /** Synchronous snapshot of all persisted episodes (used at engine boot). */
+  getAllEpisodesSync(): EpisodicMemoryEpisode[] {
+    return Array.from(this.episodes.values());
   }
 
   async searchEpisodes(goal: string, userId: string, limit = 5): Promise<EpisodicMemoryEpisode[]> {

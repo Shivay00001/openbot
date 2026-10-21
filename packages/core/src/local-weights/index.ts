@@ -1,260 +1,132 @@
 /**
  * OpenBot Local Model Weight & Inference System
- * 
+ *
  * Provides:
- * - Direct local weight management (GGUF, ONNX, WebLLM safetensors)
- * - In-process / In-app inference engine (WebGPU WebLLM, node-llama-cpp, llama.rn)
- * - Model Weight Downloader with SHA-256 verification, resume, chunking
- * - Hardware capability detection (WebGPU, VRAM, RAM, CPU threads)
- * - Zero-cloud privacy mode with 100% on-device execution
+ * - A curated catalog of GGUF weights (DeepSeek R1, Qwen 2.5, Llama 3.2, ...)
+ * - REAL weight downloads: streamed HTTP with resume (.part files),
+ *   live progress, and SHA-256 verification of the finished file.
+ * - Local inference through a local Ollama server: downloaded GGUF files are
+ *   registered with Ollama (`/api/create`) and served from there, so prompts
+ *   are processed 100% on-device. If Ollama is not running or the weight is
+ *   not installed, calls fail with the real error — responses are never
+ *   fabricated locally.
+ * - Hardware capability detection for model recommendations.
  */
 
 import { v4 as uuid } from 'uuid';
-import type {
-  ModelConfig,
-  Message,
-  StreamEvent,
-} from '../types/index.js';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
+import type { StreamEvent } from '../types/index.js';
 import type { ModelAdapter, CompletionParams, CompletionResult } from '../models/index.js';
+import { zeroCloudGuard } from '../security/zero-cloud.js';
 
 // ─── Model Weight Metadata ──────────────────────────────────────
 
-export interface ModelWeightInfo {
-  id: string;
-  name: string;
-  family: 'llama' | 'qwen' | 'deepseek' | 'smollm' | 'phi' | 'gemma' | 'whisper';
-  description: string;
-  parameterSize: string; // e.g. "1.5B", "3B", "7B"
-  quantization: 'Q4_K_M' | 'Q5_K_M' | 'Q8_0' | 'FP16' | 'q4f16_1';
-  sizeBytes: number;
-  sizeFormatted: string; // e.g. "1.2 GB"
-  contextLength: number;
-  downloadUrl: string;
-  sha256?: string;
-  recommendedHardware: {
-    minRamGb: number;
-    preferredVramGb: number;
-    webgpuSupported: boolean;
-    mobileOptimized: boolean;
-  };
-  tags: string[];
-  capabilities: ('chat' | 'code' | 'reasoning' | 'vision' | 'audio')[];
-}
+// ─── Model Weight Metadata (pure data lives in ./catalog.ts) ────
+export type { ModelWeightInfo, WeightDownloadProgress, HardwareProfile } from './catalog.js';
+export { LOCAL_WEIGHT_CATALOG } from './catalog.js';
+import type { ModelWeightInfo, WeightDownloadProgress, HardwareProfile } from './catalog.js';
+import { LOCAL_WEIGHT_CATALOG } from './catalog.js';
 
-export interface WeightDownloadProgress {
-  modelId: string;
-  bytesDownloaded: number;
-  totalBytes: number;
-  percentage: number;
-  speedBytesPerSec: number;
-  etaSeconds: number;
-  status: 'idle' | 'downloading' | 'verifying' | 'ready' | 'error' | 'paused';
-  error?: string;
-}
-
-export interface HardwareProfile {
-  hasWebGpu: boolean;
-  gpuAdapter?: string;
-  systemRamGb?: number;
-  availableVramGb?: number;
-  cpuCores: number;
-  recommendedModelId: string;
-}
-
-// ─── Curated Local Model Catalog ────────────────────────────────
-
-export const LOCAL_WEIGHT_CATALOG: ModelWeightInfo[] = [
-  {
-    id: 'deepseek-r1-distill-qwen-1.5b-q4',
-    name: 'DeepSeek R1 Distill Qwen (1.5B)',
-    family: 'deepseek',
-    description: 'State-of-the-art distilled reasoning model. Excels at complex logic, step-by-step thinking, and tool planning.',
-    parameterSize: '1.5B',
-    quantization: 'Q4_K_M',
-    sizeBytes: 1_180_000_000,
-    sizeFormatted: '1.18 GB',
-    contextLength: 32768,
-    downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf',
-    recommendedHardware: {
-      minRamGb: 4,
-      preferredVramGb: 2,
-      webgpuSupported: true,
-      mobileOptimized: true,
-    },
-    tags: ['reasoning', 'recommended', 'fast', 'low-vram'],
-    capabilities: ['chat', 'reasoning', 'code'],
-  },
-  {
-    id: 'qwen2.5-coder-1.5b-q4',
-    name: 'Qwen 2.5 Coder (1.5B)',
-    family: 'qwen',
-    description: 'Specialized coding and agentic model. Fast code synthesis, bug fixing, tool calling, and shell command generation.',
-    parameterSize: '1.5B',
-    quantization: 'Q4_K_M',
-    sizeBytes: 1_120_000_000,
-    sizeFormatted: '1.12 GB',
-    contextLength: 32768,
-    downloadUrl: 'https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf',
-    recommendedHardware: {
-      minRamGb: 4,
-      preferredVramGb: 2,
-      webgpuSupported: true,
-      mobileOptimized: true,
-    },
-    tags: ['code', 'developer', 'tool-calling'],
-    capabilities: ['chat', 'code'],
-  },
-  {
-    id: 'llama-3.2-1b-instruct-q4',
-    name: 'Llama 3.2 Instruct (1B)',
-    family: 'llama',
-    description: 'Meta flagship ultra-compact model. Extreme speed, low memory footprint, runs natively on phones and web browsers.',
-    parameterSize: '1B',
-    quantization: 'Q4_K_M',
-    sizeBytes: 810_000_000,
-    sizeFormatted: '810 MB',
-    contextLength: 131072,
-    downloadUrl: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf',
-    recommendedHardware: {
-      minRamGb: 2,
-      preferredVramGb: 1,
-      webgpuSupported: true,
-      mobileOptimized: true,
-    },
-    tags: ['ultra-light', 'phone-ready', 'webgpu', 'low-memory'],
-    capabilities: ['chat'],
-  },
-  {
-    id: 'llama-3.2-3b-instruct-q4',
-    name: 'Llama 3.2 Instruct (3B)',
-    family: 'llama',
-    description: 'Balanced power and portability from Meta. High general intelligence, multi-turn conversation, and agent tool execution.',
-    parameterSize: '3B',
-    quantization: 'Q4_K_M',
-    sizeBytes: 2_020_000_000,
-    sizeFormatted: '2.02 GB',
-    contextLength: 131072,
-    downloadUrl: 'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf',
-    recommendedHardware: {
-      minRamGb: 6,
-      preferredVramGb: 3,
-      webgpuSupported: true,
-      mobileOptimized: true,
-    },
-    tags: ['balanced', 'smart', 'agentic'],
-    capabilities: ['chat', 'code'],
-  },
-  {
-    id: 'smollm2-1.7b-instruct-q4',
-    name: 'SmolLM2 Instruct (1.7B)',
-    family: 'smollm',
-    description: 'Hugging Face compact marvel. Trained on high-quality synthetic educational & agentic datasets.',
-    parameterSize: '1.7B',
-    quantization: 'Q4_K_M',
-    sizeBytes: 1_040_000_000,
-    sizeFormatted: '1.04 GB',
-    contextLength: 8192,
-    downloadUrl: 'https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF/resolve/main/smollm2-1.7b-instruct-q4_k_m.gguf',
-    recommendedHardware: {
-      minRamGb: 4,
-      preferredVramGb: 1.5,
-      webgpuSupported: true,
-      mobileOptimized: true,
-    },
-    tags: ['compact', 'open-weights', 'efficient'],
-    capabilities: ['chat'],
-  },
-  {
-    id: 'deepseek-r1-distill-qwen-7b-q4',
-    name: 'DeepSeek R1 Distill Qwen (7B)',
-    family: 'deepseek',
-    description: 'Frontier-grade local reasoning. Matches large cloud models in math, coding competitions, and complex research tasks.',
-    parameterSize: '7B',
-    quantization: 'Q4_K_M',
-    sizeBytes: 4_680_000_000,
-    sizeFormatted: '4.68 GB',
-    contextLength: 32768,
-    downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf',
-    recommendedHardware: {
-      minRamGb: 16,
-      preferredVramGb: 6,
-      webgpuSupported: false,
-      mobileOptimized: false,
-    },
-    tags: ['frontier', 'high-power', 'laptop-desktop-only'],
-    capabilities: ['chat', 'reasoning', 'code'],
-  },
-  {
-    id: 'whisper-base-voice',
-    name: 'Whisper Base (Audio STT)',
-    family: 'whisper',
-    description: 'Local on-device automatic speech recognition. Zero cloud audio upload for maximum voice privacy.',
-    parameterSize: '74M',
-    quantization: 'Q5_K_M',
-    sizeBytes: 142_000_000,
-    sizeFormatted: '142 MB',
-    contextLength: 448,
-    downloadUrl: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
-    recommendedHardware: {
-      minRamGb: 2,
-      preferredVramGb: 0.5,
-      webgpuSupported: true,
-      mobileOptimized: true,
-    },
-    tags: ['voice', 'speech-to-text', 'audio', 'fast'],
-    capabilities: ['audio'],
-  },
-];
 
 // ─── Local Weight Manager ───────────────────────────────────────
 
+interface InstalledManifestEntry {
+  modelId: string;
+  localPath: string;
+  sizeBytes: number;
+  sha256: string;
+  installedAt: string;
+}
+
+export interface ModelWeightManagerOptions {
+  /** Directory where weights are stored (default <cwd>/.openbot_models). */
+  dir?: string;
+}
+
 export class ModelWeightManager {
-  private downloadedWeights: Map<string, { info: ModelWeightInfo; localPath: string; installedAt: Date }> = new Map();
-  private activeDownloads: Map<string, WeightDownloadProgress> = new Map();
+  private readonly dir: string;
+  private readonly manifestPath: string;
+  private manifest: Map<string, InstalledManifestEntry> = new Map();
   private listeners: Set<(progress: WeightDownloadProgress) => void> = new Set();
 
-  constructor() {
-    // Check local storage or indexedDB if available
+  constructor(options: ModelWeightManagerOptions = {}) {
+    this.dir = options.dir || path.resolve(process.cwd(), '.openbot_models');
+    this.manifestPath = path.join(this.dir, 'manifest.json');
+    this.loadManifest();
   }
 
-  /**
-   * Get complete catalog of available models for local installation
-   */
+  get modelsDir(): string {
+    return this.dir;
+  }
+
+  private loadManifest(): void {
+    try {
+      if (fs.existsSync(this.manifestPath)) {
+        const entries = JSON.parse(fs.readFileSync(this.manifestPath, 'utf8')) as InstalledManifestEntry[];
+        for (const entry of entries) {
+          if (fs.existsSync(entry.localPath)) this.manifest.set(entry.modelId, entry);
+        }
+      }
+    } catch {
+      this.manifest.clear();
+    }
+  }
+
+  private saveManifest(): void {
+    fs.mkdirSync(this.dir, { recursive: true });
+    fs.writeFileSync(this.manifestPath, JSON.stringify(Array.from(this.manifest.values()), null, 2));
+  }
+
   getCatalog(): ModelWeightInfo[] {
     return LOCAL_WEIGHT_CATALOG;
   }
 
-  /**
-   * Get list of currently downloaded/installed model weights
-   */
   getInstalledWeights(): { info: ModelWeightInfo; localPath: string; installedAt: Date }[] {
-    return Array.from(this.downloadedWeights.values());
+    const installed: { info: ModelWeightInfo; localPath: string; installedAt: Date }[] = [];
+    for (const entry of this.manifest.values()) {
+      const info = LOCAL_WEIGHT_CATALOG.find((m) => m.id === entry.modelId);
+      if (info) {
+        installed.push({ info, localPath: entry.localPath, installedAt: new Date(entry.installedAt) });
+      }
+    }
+    return installed;
   }
 
-  /**
-   * Check if a specific model weight is already downloaded locally
-   */
   isModelInstalled(modelId: string): boolean {
-    return this.downloadedWeights.has(modelId);
+    const entry = this.manifest.get(modelId);
+    return Boolean(entry && fs.existsSync(entry.localPath));
   }
 
-  /**
-   * Subscribe to download progress events
-   */
+  getInstalledPath(modelId: string): string | null {
+    const entry = this.manifest.get(modelId);
+    return entry && fs.existsSync(entry.localPath) ? entry.localPath : null;
+  }
+
   onDownloadProgress(callback: (progress: WeightDownloadProgress) => void): () => void {
     this.listeners.add(callback);
     return () => this.listeners.delete(callback);
   }
 
   private notifyProgress(progress: WeightDownloadProgress) {
-    this.activeDownloads.set(progress.modelId, progress);
-    for (const listener of this.listeners) {
-      listener(progress);
-    }
+    for (const listener of this.listeners) listener(progress);
+  }
+
+  private async sha256OfFile(filePath: string): Promise<string> {
+    const hash = crypto.createHash('sha256');
+    await pipeline(fs.createReadStream(filePath), hash);
+    return hash.digest('hex');
   }
 
   /**
-   * Start downloading a model weight
+   * Download a model weight for real: streamed to `<id>.gguf.part`, resumed
+   * with a Range header when a partial file exists, then SHA-256 verified
+   * (against the catalog checksum when published; the computed digest is
+   * always recorded in the manifest) and atomically renamed into place.
    */
   async startDownload(
     modelId: string,
@@ -265,77 +137,130 @@ export class ModelWeightManager {
       return { success: false, error: `Model ${modelId} not found in catalog` };
     }
 
-    if (this.downloadedWeights.has(modelId)) {
-      return {
-        success: true,
-        localPath: this.downloadedWeights.get(modelId)!.localPath,
-      };
+    const existing = this.getInstalledPath(modelId);
+    if (existing) {
+      return { success: true, localPath: existing };
     }
 
-    const progress: WeightDownloadProgress = {
-      modelId,
-      bytesDownloaded: 0,
-      totalBytes: model.sizeBytes,
-      percentage: 0,
-      speedBytesPerSec: 0,
-      etaSeconds: 30,
-      status: 'downloading',
+    fs.mkdirSync(this.dir, { recursive: true });
+    const extension = model.downloadUrl.endsWith('.bin') ? '.bin' : '.gguf';
+    const finalPath = path.join(this.dir, `${model.id}${extension}`);
+    const partPath = `${finalPath}.part`;
+
+    const emit = (progress: WeightDownloadProgress) => {
+      this.notifyProgress(progress);
+      onProgress?.(progress);
     };
 
-    this.notifyProgress(progress);
-    if (onProgress) onProgress(progress);
+    try {
+      zeroCloudGuard.assertAllowed(model.downloadUrl);
 
-    // Simulation of chunked download for development & client mock
-    // In Tauri/Node: uses fs.createWriteStream + axios/fetch with range headers
-    // In Browser: uses CacheStorage / OPFS (Origin Private File System)
-    return new Promise((resolve) => {
-      let downloaded = 0;
-      const chunkSize = model.sizeBytes / 10;
-      const interval = setInterval(() => {
-        downloaded += chunkSize;
-        const currentPercentage = Math.min(100, Math.round((downloaded / model.sizeBytes) * 100));
+      const resumeFrom = fs.existsSync(partPath) ? fs.statSync(partPath).size : 0;
+      const headers: Record<string, string> = {};
+      if (resumeFrom > 0) headers['Range'] = `bytes=${resumeFrom}-`;
 
-        const updatedProgress: WeightDownloadProgress = {
+      const response = await fetch(model.downloadUrl, { headers, redirect: 'follow' });
+      if (!response.ok || !response.body) {
+        throw new Error(`Download failed: HTTP ${response.status} from ${new URL(model.downloadUrl).hostname}`);
+      }
+
+      // If the server ignored our Range request, restart from scratch.
+      const append = resumeFrom > 0 && response.status === 206;
+      const totalBytes = append
+        ? resumeFrom + Number(response.headers.get('content-length') || model.sizeBytes - resumeFrom)
+        : Number(response.headers.get('content-length') || model.sizeBytes);
+
+      let downloaded = append ? resumeFrom : 0;
+      const startedAt = Date.now();
+      const source = Readable.fromWeb(response.body as any);
+      source.on('data', (chunk: Buffer) => {
+        downloaded += chunk.length;
+        const elapsedSec = Math.max(0.001, (Date.now() - startedAt) / 1000);
+        const speed = downloaded / elapsedSec;
+        emit({
           modelId,
           bytesDownloaded: downloaded,
-          totalBytes: model.sizeBytes,
-          percentage: currentPercentage,
-          speedBytesPerSec: 15_000_000, // ~15 MB/s
-          etaSeconds: Math.max(0, Math.round((model.sizeBytes - downloaded) / 15_000_000)),
-          status: currentPercentage >= 100 ? 'ready' : 'downloading',
-        };
+          totalBytes,
+          percentage: totalBytes > 0 ? Math.min(100, Math.round((downloaded / totalBytes) * 100)) : 0,
+          speedBytesPerSec: Math.round(speed),
+          etaSeconds: speed > 0 ? Math.max(0, Math.round((totalBytes - downloaded) / speed)) : 0,
+          status: 'downloading',
+        });
+      });
 
-        this.notifyProgress(updatedProgress);
-        if (onProgress) onProgress(updatedProgress);
+      await pipeline(source, fs.createWriteStream(partPath, { flags: append ? 'a' : 'w' }));
 
-        if (currentPercentage >= 100) {
-          clearInterval(interval);
-          const localPath = `local://models/${model.id}.gguf`;
-          this.downloadedWeights.set(modelId, {
-            info: model,
-            localPath,
-            installedAt: new Date(),
-          });
-          resolve({ success: true, localPath });
-        }
-      }, 300);
-    });
-  }
+      emit({
+        modelId,
+        bytesDownloaded: downloaded,
+        totalBytes,
+        percentage: 100,
+        speedBytesPerSec: 0,
+        etaSeconds: 0,
+        status: 'verifying',
+      });
 
-  /**
-   * Delete installed model weight to free up disk/cache space
-   */
-  async deleteModel(modelId: string): Promise<boolean> {
-    if (this.downloadedWeights.has(modelId)) {
-      this.downloadedWeights.delete(modelId);
-      this.activeDownloads.delete(modelId);
-      return true;
+      const digest = await this.sha256OfFile(partPath);
+      if (model.sha256 && digest.toLowerCase() !== model.sha256.toLowerCase()) {
+        fs.unlinkSync(partPath);
+        throw new Error(`SHA-256 verification failed for ${modelId}: expected ${model.sha256}, got ${digest}. Partial file deleted.`);
+      }
+
+      fs.renameSync(partPath, finalPath);
+      const sizeBytes = fs.statSync(finalPath).size;
+      this.manifest.set(modelId, {
+        modelId,
+        localPath: finalPath,
+        sizeBytes,
+        sha256: digest,
+        installedAt: new Date().toISOString(),
+      });
+      this.saveManifest();
+
+      emit({
+        modelId,
+        bytesDownloaded: sizeBytes,
+        totalBytes: sizeBytes,
+        percentage: 100,
+        speedBytesPerSec: 0,
+        etaSeconds: 0,
+        status: 'ready',
+      });
+
+      return { success: true, localPath: finalPath };
+    } catch (err: any) {
+      emit({
+        modelId,
+        bytesDownloaded: 0,
+        totalBytes: model.sizeBytes,
+        percentage: 0,
+        speedBytesPerSec: 0,
+        etaSeconds: 0,
+        status: 'error',
+        error: err.message,
+      });
+      return { success: false, error: err.message };
     }
-    return false;
+  }
+
+  /** Delete an installed model weight and its manifest entry. */
+  async deleteModel(modelId: string): Promise<boolean> {
+    const entry = this.manifest.get(modelId);
+    if (!entry) return false;
+    try {
+      if (fs.existsSync(entry.localPath)) fs.unlinkSync(entry.localPath);
+    } catch {
+      // file already gone — still drop the manifest entry
+    }
+    this.manifest.delete(modelId);
+    this.saveManifest();
+    return true;
   }
 
   /**
-   * Detect client hardware capabilities for running local weights
+   * Detect hardware capabilities for model recommendations.
+   * In Node this reads the real OS memory/CPU; in browsers it uses
+   * navigator + WebGPU when present.
    */
   async detectHardware(): Promise<HardwareProfile> {
     const hasNavigator = typeof navigator !== 'undefined';
@@ -357,140 +282,198 @@ export class ModelWeightManager {
       }
     }
 
-    const cpuCores = hasNavigator ? (navigator.hardwareConcurrency || 4) : 8;
-    const deviceMemory = hasNavigator && 'deviceMemory' in navigator
-      ? (navigator as unknown as { deviceMemory: number }).deviceMemory
-      : 8;
-
-    // Suggest model based on hardware
-    let recommended = 'llama-3.2-1b-instruct-q4';
-    if (deviceMemory >= 16) {
-      recommended = 'deepseek-r1-distill-qwen-7b-q4';
-    } else if (deviceMemory >= 8) {
-      recommended = 'deepseek-r1-distill-qwen-1.5b-q4';
-    } else if (deviceMemory >= 4) {
-      recommended = 'qwen2.5-coder-1.5b-q4';
+    let cpuCores: number;
+    let ramGb: number;
+    if (hasNavigator) {
+      cpuCores = navigator.hardwareConcurrency || 4;
+      ramGb = 'deviceMemory' in navigator ? (navigator as unknown as { deviceMemory: number }).deviceMemory : 8;
+    } else {
+      cpuCores = os.cpus().length || 4;
+      ramGb = Math.round((os.totalmem() / 1_073_741_824) * 10) / 10;
     }
+
+    let recommended = 'llama-3.2-1b-instruct-q4';
+    if (ramGb >= 16) recommended = 'deepseek-r1-distill-qwen-7b-q4';
+    else if (ramGb >= 8) recommended = 'deepseek-r1-distill-qwen-1.5b-q4';
+    else if (ramGb >= 4) recommended = 'qwen2.5-coder-1.5b-q4';
 
     return {
       hasWebGpu,
       gpuAdapter: gpuAdapterName,
-      systemRamGb: deviceMemory,
-      availableVramGb: hasWebGpu ? Math.round(deviceMemory * 0.5) : undefined,
+      systemRamGb: ramGb,
+      availableVramGb: hasWebGpu ? Math.round(ramGb * 0.5) : undefined,
       cpuCores,
       recommendedModelId: recommended,
     };
   }
 }
 
-// ─── Local In-Process Inference Adapter ──────────────────────────
+// ─── Local Inference Adapter (Ollama-backed) ────────────────────
 
 export class LocalWeightInferenceAdapter implements ModelAdapter {
   private weightManager: ModelWeightManager;
-  private currentLoadedModelId?: string;
-  private isModelLoaded = false;
+  private readonly ollamaBaseUrl: string;
+  private registeredModels: Set<string> = new Set();
 
-  constructor(weightManager: ModelWeightManager) {
+  constructor(weightManager: ModelWeightManager, ollamaBaseUrl?: string) {
     this.weightManager = weightManager;
+    this.ollamaBaseUrl = (ollamaBaseUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, '');
   }
 
   async healthCheck(): Promise<boolean> {
-    return true; // Always healthy because it runs inside the app process
+    try {
+      const res = await fetch(`${this.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   async listModels(): Promise<string[]> {
-    const installed = this.weightManager.getInstalledWeights();
-    if (installed.length === 0) {
-      // Return default catalog models
-      return LOCAL_WEIGHT_CATALOG.map((m) => `local:${m.id}`);
+    try {
+      const res = await fetch(`${this.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return [];
+      const data: any = await res.json();
+      return (data.models || []).map((m: any) => `local:${m.name}`);
+    } catch {
+      return [];
     }
-    return installed.map((m) => `local:${m.info.id}`);
   }
 
   /**
-   * Load model weights into memory/WebGPU
+   * Make a downloaded GGUF usable: registers it with the local Ollama
+   * server via /api/create (Modelfile FROM <path>) the first time it is used.
    */
   async loadModel(modelId: string): Promise<boolean> {
-    this.currentLoadedModelId = modelId;
-    this.isModelLoaded = true;
+    await this.ensureOllamaModel(modelId);
     return true;
   }
 
-  /**
-   * Execute non-streaming local inference
-   */
+  private async ensureOllamaModel(modelId: string): Promise<string> {
+    const ollamaName = modelId.replace(/[^a-zA-Z0-9_.-]/g, '-');
+    if (this.registeredModels.has(ollamaName)) return ollamaName;
+
+    // Already present in Ollama?
+    const tagsRes = await fetch(`${this.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) }).catch((err) => {
+      throw new Error(`Ollama is not reachable at ${this.ollamaBaseUrl}: ${err.message}. Start Ollama to use local weights.`);
+    });
+    if (!tagsRes.ok) throw new Error(`Ollama returned HTTP ${tagsRes.status} on /api/tags`);
+    const tags: any = await tagsRes.json();
+    const present = (tags.models || []).some(
+      (m: any) => m.name === ollamaName || m.name === `${ollamaName}:latest`
+    );
+    if (present) {
+      this.registeredModels.add(ollamaName);
+      return ollamaName;
+    }
+
+    const localPath = this.weightManager.getInstalledPath(modelId);
+    if (!localPath) {
+      throw new Error(
+        `Local model "${modelId}" is not downloaded and not present in Ollama. Download it first via ModelWeightManager.startDownload("${modelId}") or run \`ollama pull\`.`
+      );
+    }
+
+    const createRes = await fetch(`${this.ollamaBaseUrl}/api/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: ollamaName, modelfile: `FROM ${localPath}`, stream: false }),
+    });
+    if (!createRes.ok) {
+      const detail = await createRes.text().catch(() => '');
+      throw new Error(`Ollama failed to register local weight ${modelId}: HTTP ${createRes.status} ${detail}`.trim());
+    }
+    this.registeredModels.add(ollamaName);
+    return ollamaName;
+  }
+
   async complete(params: CompletionParams): Promise<CompletionResult> {
     const startTime = Date.now();
     const modelId = params.modelConfig.model.replace('local:', '');
-    
-    // Ensure model is ready
-    if (!this.isModelLoaded || this.currentLoadedModelId !== modelId) {
-      await this.loadModel(modelId);
+    const ollamaName = await this.ensureOllamaModel(modelId);
+
+    const response = await fetch(`${this.ollamaBaseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: ollamaName,
+        messages: params.messages.map((m) => ({ role: m.role, content: m.content })),
+        stream: false,
+        options: {
+          temperature: params.modelConfig.temperature ?? 0.7,
+          num_predict: params.modelConfig.maxTokens ?? 4096,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Local Ollama inference failed: HTTP ${response.status} ${detail}`.trim());
     }
 
-    const lastMessage = params.messages[params.messages.length - 1]?.content || '';
-    
-    // Local model simulated inference / direct engine response
-    const reasoning = `[DeepSeek-R1 Local Reasoning Step]:
-1. Analyzed input: "${lastMessage.substring(0, 50)}..."
-2. Operating in 100% Zero-Cloud Private Mode on local device.
-3. Formulating response using on-device weights.`;
-
-    const responseContent = `${reasoning}\n\nHere is the synthesized response from local model [${modelId}]:\n\nI have processed your request completely on your local machine with zero data sent to external servers. How can I assist you further with this task?`;
-
-    const latency = Date.now() - startTime;
-    const promptTokens = Math.ceil(lastMessage.length / 4);
-    const completionTokens = Math.ceil(responseContent.length / 4);
+    const data: any = await response.json();
+    const promptTokens = data.prompt_eval_count || 0;
+    const completionTokens = data.eval_count || 0;
 
     return {
       id: uuid(),
-      content: responseContent,
+      content: data.message?.content || '',
       finishReason: 'stop',
       usage: {
         promptTokens,
         completionTokens,
         totalTokens: promptTokens + completionTokens,
       },
-      costUsd: 0, // Local inference has 0 token cost!
-      latencyMs: latency,
+      costUsd: 0, // Local inference has no per-token cost
+      latencyMs: Date.now() - startTime,
     };
   }
 
-  /**
-   * Execute streaming local inference
-   */
   async *stream(params: CompletionParams): AsyncGenerator<StreamEvent> {
     const modelId = params.modelConfig.model.replace('local:', '');
-    if (!this.isModelLoaded || this.currentLoadedModelId !== modelId) {
-      await this.loadModel(modelId);
+    const ollamaName = await this.ensureOllamaModel(modelId);
+
+    const response = await fetch(`${this.ollamaBaseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: ollamaName,
+        messages: params.messages.map((m) => ({ role: m.role, content: m.content })),
+        stream: true,
+        options: {
+          temperature: params.modelConfig.temperature ?? 0.7,
+          num_predict: params.modelConfig.maxTokens ?? 4096,
+        },
+      }),
+    });
+
+    if (!response.ok || !response.body) {
+      const detail = response.ok ? '' : await response.text().catch(() => '');
+      throw new Error(`Local Ollama streaming failed: HTTP ${response.status} ${detail}`.trim());
     }
 
-    yield {
-      type: 'thinking',
-      data: `[Local Engine: ${modelId}] Loading local tensor weights & initiating on-device inference...`,
-    };
-
-    const chunks = [
-      `I am running `,
-      `directly on your device `,
-      `using integrated weights (${modelId}). `,
-      `All reasoning, token generation, `,
-      `and tool evaluation occur locally with `,
-      `complete privacy and zero cloud dependence. `,
-      `What would you like me to execute?`,
-    ];
-
-    for (const chunk of chunks) {
-      await new Promise((r) => setTimeout(r, 60));
-      yield {
-        type: 'text',
-        data: chunk,
-      };
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.message?.content) {
+            yield { type: 'text', data: parsed.message.content };
+          }
+        } catch {
+          // Non-JSON keep-alive line — ignore
+        }
+      }
     }
 
-    yield {
-      type: 'done',
-      data: null,
-    };
+    yield { type: 'done', data: null };
   }
 }

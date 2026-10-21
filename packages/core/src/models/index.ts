@@ -6,6 +6,7 @@
 
 import OpenAI from 'openai';
 import { v4 as uuid } from 'uuid';
+import { zeroCloudGuard, ZeroCloudBlockedError, isLocalUrl } from '../security/zero-cloud.js';
 import type {
   ModelConfig,
   ModelProvider,
@@ -97,6 +98,10 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       apiKey: config.apiKey || 'not-needed',
       baseURL: config.baseUrl || this.getDefaultBaseUrl(config.provider),
       dangerouslyAllowBrowser: false,
+      // Every provider request passes through the Zero-Cloud egress guard:
+      // while Zero-Cloud mode is ON, non-local endpoints are blocked before
+      // any bytes leave the machine.
+      fetch: zeroCloudGuard.guardedFetch as unknown as typeof fetch,
     });
   }
 
@@ -278,12 +283,37 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
 
 // ─── Model Router ───────────────────────────────────────────────
 
+const LOCAL_PROVIDERS: ReadonlySet<string> = new Set(['ollama', 'lmstudio']);
+
 export class ModelRouter {
   private adapters: Map<string, ModelAdapter> = new Map();
   private providerConfigs: ModelProviderConfig[] = [];
   private fallbackChain: ModelConfig[] = [];
+  private zeroCloudMode = false;
 
   constructor() {}
+
+  /**
+   * Enable/disable Zero-Cloud mode. While ON, completions are only routed to
+   * local providers (Ollama / LM Studio / any loopback or LAN base URL) and
+   * the shared egress guard blocks every non-local fetch in the process.
+   */
+  setZeroCloudMode(enabled: boolean): void {
+    this.zeroCloudMode = enabled;
+    zeroCloudGuard.setEnabled(enabled);
+  }
+
+  isZeroCloudMode(): boolean {
+    return this.zeroCloudMode;
+  }
+
+  private assertZeroCloudAllows(config: ModelConfig): void {
+    if (!this.zeroCloudMode) return;
+    if (LOCAL_PROVIDERS.has(config.provider)) return;
+    const baseUrl = config.baseUrl;
+    if (baseUrl && isLocalUrl(baseUrl)) return;
+    throw new ZeroCloudBlockedError(baseUrl || `provider:${config.provider}`);
+  }
 
   /**
    * Register a model provider (BYOK)
@@ -328,6 +358,7 @@ export class ModelRouter {
    * Complete with automatic fallback
    */
   async complete(params: CompletionParams): Promise<CompletionResult> {
+    this.assertZeroCloudAllows(params.modelConfig);
     const adapter = this.getAdapter(params.modelConfig);
     try {
       return await adapter.complete(params);
@@ -350,6 +381,7 @@ export class ModelRouter {
    * Stream with automatic fallback
    */
   async *stream(params: CompletionParams): AsyncGenerator<StreamEvent> {
+    this.assertZeroCloudAllows(params.modelConfig);
     const adapter = this.getAdapter(params.modelConfig);
     try {
       yield* adapter.stream(params);

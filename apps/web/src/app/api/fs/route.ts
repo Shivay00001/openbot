@@ -12,8 +12,9 @@ export async function GET(req: NextRequest) {
 
     const fullPath = path.resolve(WORKSPACE_ROOT, targetPath);
 
-    // Prevent directory traversal outside workspace
-    if (!fullPath.startsWith(WORKSPACE_ROOT)) {
+    // Prevent directory traversal outside workspace (separator-safe check:
+    // a plain startsWith would also match sibling prefixes like /repo-evil).
+    if (fullPath !== WORKSPACE_ROOT && !fullPath.startsWith(WORKSPACE_ROOT + path.sep)) {
       return NextResponse.json({ error: 'Access denied: outside workspace root' }, { status: 403 });
     }
 
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest) {
               path: relPath.replace(/\\/g, '/'),
               isDirectory: entry.isDirectory(),
               size: 0,
-              updatedAt: new Date(),
+              updatedAt: null,
             };
           }
         })

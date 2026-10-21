@@ -16,7 +16,7 @@ import {
   Layers,
   AlertCircle
 } from 'lucide-react';
-import { LOCAL_WEIGHT_CATALOG, type ModelWeightInfo } from '@openbot/core';
+import { LOCAL_WEIGHT_CATALOG, type ModelWeightInfo } from '@openbot/core/local-weights/catalog';
 
 interface LocalWeightsViewProps {
   isZeroCloudActive: boolean;

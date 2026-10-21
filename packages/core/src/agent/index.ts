@@ -12,6 +12,7 @@ import { v4 as uuid } from 'uuid';
 import { EventEmitter } from 'eventemitter3';
 import type { ModelRouter, CompletionParams, CompletionResult } from '../models/index.js';
 import type { ToolRegistry } from '../tools/index.js';
+import { setDefaultContentGenerator } from '../tools/index.js';
 import type {
   Message,
   ToolCall,
@@ -52,6 +53,8 @@ export interface AgentConfig {
   autonomousMode?: boolean;
   /** Enable streaming responses */
   streaming?: boolean;
+  /** Zero-Cloud mode: block all non-local model calls for this agent */
+  zeroCloud?: boolean;
   /** User ID for permission checks */
   userId: string;
   /** Conversation ID */
@@ -113,6 +116,32 @@ export class AgentLoop extends EventEmitter<Record<string, [OpenBotEvent]>> {
     };
     this.modelRouter = modelRouter;
     this.toolRegistry = toolRegistry;
+
+    // Zero-Cloud mode: enforce local-only model calls on the shared router.
+    if (this.config.zeroCloud) {
+      this.modelRouter.setZeroCloudMode(true);
+    }
+
+    // Wire the generate_content tool to this agent's model router.
+    setDefaultContentGenerator(async ({ prompt, format, maxLength }) => {
+      const messages: Message[] = [
+        {
+          id: uuid(),
+          role: 'user',
+          content:
+            prompt +
+            (format ? `\n\nFormat: ${format}` : '') +
+            (maxLength ? `\nKeep it under roughly ${maxLength} characters.` : ''),
+          createdAt: new Date(),
+        },
+      ];
+      const result = await this.modelRouter.complete({
+        messages,
+        modelConfig: this.config.modelConfig,
+      });
+      return result.content;
+    });
+
     this.state = {
       status: 'idle',
       stepsCompleted: 0,
