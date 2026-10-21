@@ -416,7 +416,13 @@ export class ToolRegistry {
         const failures: string[] = [];
         for (const provider of providers) {
           try {
-            const response = await zeroCloudGuard.guardedFetch(provider.url, { headers });
+            const response = await zeroCloudGuard.guardedFetch(provider.url, {
+              headers,
+              // Bounded per provider attempt: a dead/blackholed route must
+              // surface as a provider failure (and fall through to the next
+              // provider) within seconds, never hang the tool call.
+              signal: AbortSignal.timeout(15000),
+            });
             if (!response.ok) {
               failures.push(`${provider.name}: HTTP ${response.status}`);
               continue;
@@ -439,6 +445,7 @@ export class ToolRegistry {
       const maxChars = Math.min(50000, Math.max(500, Number(input.maxChars) || 8000));
       const response = await zeroCloudGuard.guardedFetch(String(input.url), {
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OpenBot/0.1)' },
+        signal: AbortSignal.timeout(15000),
       });
       if (!response.ok) throw new Error(`Fetch failed: HTTP ${response.status} for ${input.url}`);
       const contentType = response.headers.get('content-type') || '';

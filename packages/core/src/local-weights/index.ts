@@ -23,6 +23,7 @@ import { pipeline } from 'stream/promises';
 import type { StreamEvent } from '../types/index.js';
 import type { ModelAdapter, CompletionParams, CompletionResult } from '../models/index.js';
 import { zeroCloudGuard } from '../security/zero-cloud.js';
+import { proxiedFetch, fetchWithHeaderTimeout } from '../net/http.js';
 
 // ─── Model Weight Metadata ──────────────────────────────────────
 
@@ -159,7 +160,15 @@ export class ModelWeightManager {
       const headers: Record<string, string> = {};
       if (resumeFrom > 0) headers['Range'] = `bytes=${resumeFrom}-`;
 
-      const response = await fetch(model.downloadUrl, { headers, redirect: 'follow' });
+      // Bounded to response HEADERS (30s): a dead route must fail fast,
+      // while the streamed body of a multi-GB weight is intentionally not
+      // capped (downloads are resumable via the .part file).
+      const response = await fetchWithHeaderTimeout(
+        model.downloadUrl,
+        { headers, redirect: 'follow' },
+        30000,
+        `Download of ${model.id}`
+      );
       if (!response.ok || !response.body) {
         throw new Error(`Download failed: HTTP ${response.status} from ${new URL(model.downloadUrl).hostname}`);
       }
@@ -322,7 +331,7 @@ export class LocalWeightInferenceAdapter implements ModelAdapter {
 
   async healthCheck(): Promise<boolean> {
     try {
-      const res = await fetch(`${this.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
+      const res = await proxiedFetch(`${this.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
       return res.ok;
     } catch {
       return false;
@@ -331,7 +340,7 @@ export class LocalWeightInferenceAdapter implements ModelAdapter {
 
   async listModels(): Promise<string[]> {
     try {
-      const res = await fetch(`${this.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
+      const res = await proxiedFetch(`${this.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
       if (!res.ok) return [];
       const data: any = await res.json();
       return (data.models || []).map((m: any) => `local:${m.name}`);
@@ -354,7 +363,7 @@ export class LocalWeightInferenceAdapter implements ModelAdapter {
     if (this.registeredModels.has(ollamaName)) return ollamaName;
 
     // Already present in Ollama?
-    const tagsRes = await fetch(`${this.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) }).catch((err) => {
+    const tagsRes = await proxiedFetch(`${this.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) }).catch((err) => {
       throw new Error(`Ollama is not reachable at ${this.ollamaBaseUrl}: ${err.message}. Start Ollama to use local weights.`);
     });
     if (!tagsRes.ok) throw new Error(`Ollama returned HTTP ${tagsRes.status} on /api/tags`);
@@ -374,10 +383,11 @@ export class LocalWeightInferenceAdapter implements ModelAdapter {
       );
     }
 
-    const createRes = await fetch(`${this.ollamaBaseUrl}/api/create`, {
+    const createRes = await proxiedFetch(`${this.ollamaBaseUrl}/api/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: ollamaName, modelfile: `FROM ${localPath}`, stream: false }),
+      signal: AbortSignal.timeout(120000),
     });
     if (!createRes.ok) {
       const detail = await createRes.text().catch(() => '');
@@ -392,7 +402,7 @@ export class LocalWeightInferenceAdapter implements ModelAdapter {
     const modelId = params.modelConfig.model.replace('local:', '');
     const ollamaName = await this.ensureOllamaModel(modelId);
 
-    const response = await fetch(`${this.ollamaBaseUrl}/api/chat`, {
+    const response = await proxiedFetch(`${this.ollamaBaseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -404,6 +414,9 @@ export class LocalWeightInferenceAdapter implements ModelAdapter {
           num_predict: params.modelConfig.maxTokens ?? 4096,
         },
       }),
+      // Local generation can legitimately take minutes; the bound exists so
+      // a wedged Ollama server surfaces an error instead of hanging forever.
+      signal: AbortSignal.timeout(300000),
     });
 
     if (!response.ok) {
@@ -433,7 +446,7 @@ export class LocalWeightInferenceAdapter implements ModelAdapter {
     const modelId = params.modelConfig.model.replace('local:', '');
     const ollamaName = await this.ensureOllamaModel(modelId);
 
-    const response = await fetch(`${this.ollamaBaseUrl}/api/chat`, {
+    const response = await fetchWithHeaderTimeout(`${this.ollamaBaseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -445,7 +458,7 @@ export class LocalWeightInferenceAdapter implements ModelAdapter {
           num_predict: params.modelConfig.maxTokens ?? 4096,
         },
       }),
-    });
+    }, 30000, 'Ollama streaming request');
 
     if (!response.ok || !response.body) {
       const detail = response.ok ? '' : await response.text().catch(() => '');

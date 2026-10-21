@@ -20,6 +20,8 @@ export interface VoicePersona {
   sampleAudioUrl?: string;
 }
 
+import { proxiedFetch } from '../net/http.js';
+
 /** Session shape used by the web Voice UI for in-browser calls. */
 export interface ActivePhoneCallSession {
   callId: string;
@@ -123,13 +125,14 @@ export class VoicePipelineAgent {
       );
     }
 
-    const response = await fetch(endpoint, {
+    const response = await proxiedFetch(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: body.toString(),
+      signal: AbortSignal.timeout(15000),
     });
 
     const payload: any = await response.json().catch(() => ({}));
@@ -154,12 +157,13 @@ export class VoicePipelineAgent {
     const call = this.activeCalls.get(callId);
     if (!call || !this.telephony) return call || null;
     const { accountSid, authToken } = this.telephony;
-    const response = await fetch(
+    const response = await proxiedFetch(
       `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls/${callId}.json`,
       {
         headers: {
           Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
         },
+        signal: AbortSignal.timeout(10000),
       }
     );
     if (!response.ok) return call;
@@ -196,7 +200,7 @@ export class VoicePipelineAgent {
       throw new Error('Speech synthesis not configured. Set OPENAI_API_KEY (or pass apiKey) for an OpenAI-compatible /audio/speech endpoint.');
     }
     const baseUrl = (options?.baseUrl || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
-    const response = await fetch(`${baseUrl}/audio/speech`, {
+    const response = await proxiedFetch(`${baseUrl}/audio/speech`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -207,6 +211,7 @@ export class VoicePipelineAgent {
         voice: options?.voice || 'alloy',
         input: text,
       }),
+      signal: AbortSignal.timeout(30000),
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');

@@ -17,6 +17,7 @@
 
 import type { PhoneElementNode } from './index.js';
 import { zeroCloudGuard } from '../security/zero-cloud.js';
+import { proxiedFetch } from '../net/http.js';
 
 export interface AccessibilityEventPayload {
   eventType:
@@ -55,7 +56,7 @@ export class AccessibilityServiceBridge {
   private async request<T>(method: string, route: string, body?: unknown): Promise<T | null> {
     try {
       zeroCloudGuard.assertAllowed(this.baseUrl);
-      const response = await fetch(`${this.baseUrl}${route}`, {
+      const response = await proxiedFetch(`${this.baseUrl}${route}`, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: body !== undefined ? JSON.stringify(body) : undefined,

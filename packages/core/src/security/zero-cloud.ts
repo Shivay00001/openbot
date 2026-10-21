@@ -13,7 +13,15 @@
  *   TTS) call `guardedFetch` directly.
  * - `installGlobalFetchGuard()` optionally wraps globalThis.fetch so any
  *   other library traffic in the process is held to the same rule.
+ *
+ * All guarded traffic is dispatched through the shared transport layer
+ * (net/http.ts): the guard decision is made first, and only then is the
+ * request handed to the proxy-aware dispatcher.
  */
+
+import { isLocalUrl, proxiedFetch } from '../net/http.js';
+
+export { isLocalUrl };
 
 export class ZeroCloudBlockedError extends Error {
   readonly url: string;
@@ -27,64 +35,12 @@ export class ZeroCloudBlockedError extends Error {
   }
 }
 
-/** Hostnames that always count as local. */
-const LOCAL_HOSTNAMES = new Set(['localhost', '0.0.0.0', '::1', '[::1]']);
-
-function ipv4ToInt(ip: string): number | null {
-  const parts = ip.split('.');
-  if (parts.length !== 4) return null;
-  let value = 0;
-  for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return null;
-    const octet = Number(part);
-    if (octet > 255) return null;
-    value = value * 256 + octet;
-  }
-  return value >>> 0;
-}
-
-function inRange(ipInt: number, base: string, prefixBits: number): boolean {
-  const baseInt = ipv4ToInt(base);
-  if (baseInt === null) return false;
-  const mask = prefixBits === 0 ? 0 : (0xffffffff << (32 - prefixBits)) >>> 0;
-  return (ipInt & mask) === (baseInt & mask);
-}
-
-/**
- * Decide whether a URL points at a local target (this machine or the user's
- * own LAN). Non-HTTP(S) schemes (data:, file:, ws: to local, etc.) are
- * treated by scheme: only http/https/ws/wss are network egress; other
- * schemes never leave the machine via fetch and are allowed.
- */
-export function isLocalUrl(rawUrl: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return false;
-  }
-
-  if (!['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol)) {
-    return true; // data:, blob:, file: — no network egress
-  }
-
-  const host = url.hostname.toLowerCase();
-  if (LOCAL_HOSTNAMES.has(host)) return true;
-  if (host.endsWith('.local') || host.endsWith('.lan') || host.endsWith('.home')) return true;
-  if (host === '::1' || host.startsWith('fe80:')) return true; // IPv6 loopback / link-local
-
-  const ipInt = ipv4ToInt(host);
-  if (ipInt !== null) {
-    return (
-      inRange(ipInt, '127.0.0.0', 8) || // loopback
-      inRange(ipInt, '10.0.0.0', 8) || // RFC-1918
-      inRange(ipInt, '172.16.0.0', 12) || // RFC-1918
-      inRange(ipInt, '192.168.0.0', 16) || // RFC-1918
-      inRange(ipInt, '169.254.0.0', 16) // link-local
-    );
-  }
-
-  return false;
+function urlOf(input: RequestInfo | URL): string {
+  return typeof input === 'string'
+    ? input
+    : input instanceof URL
+      ? input.href
+      : (input as Request).url;
 }
 
 export class ZeroCloudGuard {
@@ -111,14 +67,8 @@ export class ZeroCloudGuard {
     input: RequestInfo | URL,
     init?: RequestInit
   ): Promise<Response> => {
-    const url =
-      typeof input === 'string'
-        ? input
-        : input instanceof URL
-          ? input.href
-          : (input as Request).url;
-    this.assertAllowed(url);
-    return fetch(input as RequestInfo, init);
+    this.assertAllowed(urlOf(input));
+    return proxiedFetch(input as string | URL | Request, init);
   }) as typeof fetch;
 }
 
@@ -135,16 +85,9 @@ let originalFetch: typeof fetch | null = null;
 export function installGlobalFetchGuard(): () => void {
   if (originalFetch) return uninstallGlobalFetchGuard;
   originalFetch = globalThis.fetch;
-  const base = originalFetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url =
-      typeof input === 'string'
-        ? input
-        : input instanceof URL
-          ? input.href
-          : (input as Request).url;
-    zeroCloudGuard.assertAllowed(url);
-    return base(input as RequestInfo, init);
+    zeroCloudGuard.assertAllowed(urlOf(input));
+    return proxiedFetch(input as string | URL | Request, init);
   }) as typeof fetch;
   return uninstallGlobalFetchGuard;
 }

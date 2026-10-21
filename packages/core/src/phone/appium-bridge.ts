@@ -6,7 +6,12 @@
  * server, calls fail with the real connection error — never fake success.
  */
 
-import { WebDriverClient, WebDriverError } from '../browser/webdriver-client.js';
+import {
+  WebDriverClient,
+  WebDriverError,
+  resolveWebDriverTimeoutMs,
+} from '../browser/webdriver-client.js';
+import { proxiedFetch } from '../net/http.js';
 
 export interface AppiumCapabilities {
   platformName: 'Android' | 'iOS';
@@ -71,11 +76,11 @@ export class AppiumBridge {
     const session = this.requireSession();
     let response: Response;
     try {
-      response = await fetch(`${this.client.endpoint}/session/${session}/element`, {
+      response = await proxiedFetch(`${this.client.endpoint}/session/${session}/element`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ using, value }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(resolveWebDriverTimeoutMs()),
       });
     } catch (err: any) {
       throw new WebDriverError(`Appium server unreachable at ${this.client.endpoint}: ${err.message}`);
@@ -163,13 +168,13 @@ export class AppiumBridge {
 
       let response: Response;
       try {
-        response = await fetch(`${this.client.endpoint}/session/${session}/actions`, {
+        response = await proxiedFetch(`${this.client.endpoint}/session/${session}/actions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             actions: [{ type: 'touch', id: 'finger1', parameters: { pointerType: 'touch' }, actions: sequence }],
           }),
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(resolveWebDriverTimeoutMs()),
         });
       } catch (err: any) {
         throw new WebDriverError(`Appium server unreachable: ${err.message}`);

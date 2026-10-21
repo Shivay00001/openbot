@@ -4,7 +4,11 @@
  * Selenium Grid, chromedriver, and geckodriver. Every method performs an
  * actual HTTP call to the configured endpoint; if no server is listening,
  * calls fail with the real connection error — nothing is simulated.
+ * Every request is bounded by an explicit timeout (default 10s) and routed
+ * through the shared proxy-aware transport, so a dead route fails fast.
  */
+
+import { proxiedFetch } from '../net/http.js';
 
 export class WebDriverError extends Error {
   readonly status?: number;
@@ -15,11 +19,31 @@ export class WebDriverError extends Error {
   }
 }
 
+/**
+ * Default per-request timeout for WebDriver/Appium protocol calls.
+ * Deliberately short: against a live server every protocol call answers in
+ * well under a second, so a longer wait only ever means "no server there" —
+ * and in sandboxed/proxied environments a dead route can blackhole a
+ * connection instead of refusing it. 10s makes an absent server surface as
+ * an honest failure fast, never as a hang. Override per client via the
+ * constructor or globally with OPENBOT_WEBDRIVER_TIMEOUT_MS.
+ */
+export const DEFAULT_WEBDRIVER_REQUEST_TIMEOUT_MS = 10_000;
+
+export function resolveWebDriverTimeoutMs(explicit?: number): number {
+  if (explicit !== undefined && explicit > 0) return explicit;
+  const fromEnv = Number(process.env.OPENBOT_WEBDRIVER_TIMEOUT_MS);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return DEFAULT_WEBDRIVER_REQUEST_TIMEOUT_MS;
+}
+
 export class WebDriverClient {
   private readonly baseUrl: string;
+  readonly requestTimeoutMs: number;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, requestTimeoutMs?: number) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.requestTimeoutMs = resolveWebDriverTimeoutMs(requestTimeoutMs);
   }
 
   get endpoint(): string {
@@ -29,11 +53,11 @@ export class WebDriverClient {
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
+      response = await proxiedFetch(`${this.baseUrl}${path}`, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
       });
     } catch (err: any) {
       throw new WebDriverError(

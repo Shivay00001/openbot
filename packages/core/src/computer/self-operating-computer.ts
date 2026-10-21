@@ -24,6 +24,7 @@ import type {
   ComputerActionResult,
 } from './types.js';
 import { PyAutoGUIAdapter } from './adapters/pyautogui-adapter.js';
+import { proxiedFetch } from '../net/http.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -45,7 +46,7 @@ function label(elements: Array<Omit<VisualGroundingElement, 'id' | 'labelIndex'>
 /** Detector backed by an OmniParser-compatible HTTP endpoint. */
 export function createOmniParserDetector(endpoint: string): VisualElementDetector {
   return async (screenshotBase64: string) => {
-    const response = await fetch(endpoint, {
+    const response = await proxiedFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image: screenshotBase64.replace(/^data:image\/[a-z]+;base64,/, '') }),

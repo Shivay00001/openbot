@@ -77,6 +77,9 @@ export class PuppeteerAdapter implements UniversalBrowserAdapter {
     this.browser = await puppeteer.launch({
       executablePath,
       headless: this.isHeadless,
+      // Explicit launch bound (matches the puppeteer default, stated so a
+      // wedged Chrome startup fails instead of hanging the caller).
+      timeout: 30000,
       args: ['--no-sandbox', '--disable-dev-shm-usage'],
     });
     this.page = await this.browser.newPage();
