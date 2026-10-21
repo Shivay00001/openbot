@@ -19,7 +19,10 @@
     "test": "turbo run test",
     "db:migrate": "turbo run db:migrate --filter=@openbot/api-gateway",
     "db:push": "turbo run db:push --filter=@openbot/api-gateway",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "docker:one-click": "docker compose -f docker-compose.one-click.yml up --build -d",
+    "docker:down": "docker compose -f docker-compose.one-click.yml down",
+    "docker:logs": "docker compose -f docker-compose.one-click.yml logs -f"
   },
   "devDependencies": {
     "@types/yargs": "^17.0.35",

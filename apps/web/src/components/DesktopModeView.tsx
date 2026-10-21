@@ -15,7 +15,8 @@ import {
   Keyboard, 
   HardDrive,
   FileCode,
-  ArrowRight
+  ArrowRight,
+  ExternalLink
 } from 'lucide-react';
 
 interface FileItem {
@@ -40,7 +41,7 @@ export const DesktopModeView: React.FC = () => {
   const [commandInput, setCommandInput] = useState('git status');
   const [commandHistory, setCommandHistory] = useState<CommandLog[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'terminal' | 'files'>('terminal');
+  const [activeTab, setActiveTab] = useState<'terminal' | 'files' | 'docker-os'>('docker-os');
 
   // Real File System State
   const [currentDirPath, setCurrentDirPath] = useState<string>('');
@@ -291,12 +292,20 @@ export const DesktopModeView: React.FC = () => {
         {/* Navigation Tabs */}
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
+            onClick={() => setActiveTab('docker-os')}
+            className={`btn ${activeTab === 'docker-os' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ fontSize: '13px', padding: '8px 16px' }}
+          >
+            <Monitor size={15} />
+            <span>Dockerized OS Desktop (noVNC GUI)</span>
+          </button>
+          <button
             onClick={() => setActiveTab('terminal')}
             className={`btn ${activeTab === 'terminal' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ fontSize: '13px', padding: '8px 16px' }}
           >
             <Terminal size={15} />
-            <span>Real Terminal Console</span>
+            <span>Host Shell Console</span>
           </button>
           {selectedFileContent && (
             <button
@@ -309,6 +318,70 @@ export const DesktopModeView: React.FC = () => {
             </button>
           )}
         </div>
+
+        {/* Tab 0: Dockerized OS Desktop (noVNC Web Desktop) */}
+        {activeTab === 'docker-os' && (
+          <div
+            className="glass-panel"
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              background: '#07090e',
+              border: '1px solid #1e293b',
+              borderRadius: 'var(--radius-md)',
+              overflow: 'hidden',
+              minHeight: '480px',
+            }}
+          >
+            {/* noVNC Header Bar */}
+            <div
+              style={{
+                height: '42px',
+                background: '#0f172a',
+                borderBottom: '1px solid #1e293b',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0 16px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#10b981' }} />
+                <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
+                  Ubuntu XFCE Desktop Sandbox (Docker OS :6080)
+                </span>
+                <span className="badge badge-emerald" style={{ fontSize: '10px' }}>
+                  Live noVNC GUI
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => window.open('http://localhost:6080', '_blank')}
+                  className="btn btn-secondary"
+                  style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}
+                >
+                  <ExternalLink size={12} />
+                  <span>Open in Full Tab</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Embedded noVNC Web Desktop Frame */}
+            <div style={{ flex: 1, position: 'relative', background: '#000' }}>
+              <iframe
+                src="http://localhost:6080"
+                title="OpenBot Dockerized OS Desktop"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  border: 'none',
+                  minHeight: '460px',
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Tab 1: Terminal Console */}
         {activeTab === 'terminal' && (

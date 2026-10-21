@@ -39,14 +39,41 @@ export const BrowserModeView: React.FC = () => {
   const [urlInput, setUrlInput] = useState('https://news.ycombinator.com');
   const [isLoading, setIsLoading] = useState(false);
   const [pageData, setPageData] = useState<WebpageData | null>(null);
+  const [screenshotData, setScreenshotData] = useState<string | null>(null);
+  const [viewTab, setViewTab] = useState<'content' | 'screenshot'>('content');
   const [browserLogs, setBrowserLogs] = useState<string[]>([
-    'Browser Agent: Live HTTP / DOM Extraction Engine ready.',
+    'Browser Agent: Multi-engine web automation ready (Fast DOM + Docker Chromium CDP).',
   ]);
 
   // Load initial page on mount
   useEffect(() => {
     fetchRealPage('https://news.ycombinator.com');
   }, []);
+
+  const captureChromiumScreenshot = async () => {
+    if (!urlInput.trim()) return;
+    setIsLoading(true);
+    setBrowserLogs((prev) => [`Docker Browser: Capturing real Chromium snapshot of ${urlInput}...`, ...prev]);
+    try {
+      const res = await fetch('/api/browser', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: urlInput.trim(), action: 'screenshot' }),
+      });
+      const data = await res.json();
+      if (data.screenshot) {
+        setScreenshotData(data.screenshot);
+        setViewTab('screenshot');
+        setBrowserLogs((prev) => [`Success: Captured real Chromium pixel screenshot from Docker sandbox.`, ...prev]);
+      } else {
+        setBrowserLogs((prev) => [`Notice: Fallback to DOM view (${data.error || 'Docker browser offline'})`, ...prev]);
+      }
+    } catch {
+      setBrowserLogs((prev) => [`Error: Screenshot failed`, ...prev]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const fetchRealPage = async (targetUrl: string) => {
     if (!targetUrl.trim() || isLoading) return;
@@ -159,6 +186,15 @@ export const BrowserModeView: React.FC = () => {
           <span>{isLoading ? 'Navigating...' : 'Navigate Live'}</span>
         </button>
 
+        <button
+          onClick={captureChromiumScreenshot}
+          disabled={isLoading}
+          className="btn btn-secondary"
+          style={{ padding: '6px 14px', fontSize: '12px' }}
+        >
+          <span>Chromium Snapshot</span>
+        </button>
+
         {/* Quick Presets */}
         <div style={{ display: 'flex', gap: '6px' }}>
           <button
@@ -207,7 +243,45 @@ export const BrowserModeView: React.FC = () => {
             color: '#1e293b',
           }}
         >
-          {pageData ? (
+          {/* Tab Header: DOM Content vs Chromium Snapshot */}
+          <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', background: '#f8fafc', padding: '0 16px' }}>
+            <button
+              onClick={() => setViewTab('content')}
+              style={{
+                padding: '8px 16px',
+                border: 'none',
+                background: 'none',
+                fontWeight: 600,
+                fontSize: '12px',
+                color: viewTab === 'content' ? '#2563eb' : '#64748b',
+                borderBottom: viewTab === 'content' ? '2px solid #2563eb' : 'none',
+                cursor: 'pointer',
+              }}
+            >
+              Extracted DOM View
+            </button>
+            <button
+              onClick={() => setViewTab('screenshot')}
+              style={{
+                padding: '8px 16px',
+                border: 'none',
+                background: 'none',
+                fontWeight: 600,
+                fontSize: '12px',
+                color: viewTab === 'screenshot' ? '#2563eb' : '#64748b',
+                borderBottom: viewTab === 'screenshot' ? '2px solid #2563eb' : 'none',
+                cursor: 'pointer',
+              }}
+            >
+              Chromium Pixel Snapshot {screenshotData && '●'}
+            </button>
+          </div>
+
+          {viewTab === 'screenshot' && screenshotData ? (
+            <div style={{ flex: 1, overflowY: 'auto', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+              <img src={screenshotData} alt="Live Chromium Screenshot" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', boxShadow: '0 4px 20px rgba(0,0,0,0.5)' }} />
+            </div>
+          ) : pageData ? (
             <div
               style={{
                 flex: 1,

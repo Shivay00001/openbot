@@ -15,6 +15,11 @@ services:
       - DATABASE_URL=postgresql://openbot_user:free_tier_secret_password@postgres:5432/openbot?schema=public
       - REDIS_URL=redis://redis:6379
       - OLLAMA_BASE_URL=http://ollama:11434
+      - ADB_HOST=phone-bridge
+      - ADB_PORT=5037
+      - NEXT_PUBLIC_DOCKER_OS_URL=http://localhost:6080
+      - NEXT_PUBLIC_DOCKER_BROWSER_URL=http://localhost:3002
+      - NEXT_PUBLIC_PHONE_STREAM_URL=http://localhost:8000/stream
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,7 +65,55 @@ services:
     volumes:
       - ollama_models:/root/.ollama
 
+  # ─── 5. Dockerized OS Desktop Sandbox (Full Ubuntu GUI + noVNC) ────
+  os-desktop:
+    image: lscr.io/linuxserver/webtop:ubuntu-xfce
+    container_name: openbot-os-desktop
+    restart: unless-stopped
+    shm_size: "1gb"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - SUBFOLDER=/
+      - TITLE=OpenBot OS Desktop
+    ports:
+      - "6080:3000"
+    volumes:
+      - os_desktop_data:/config
+      - ../..:/workspace
+
+  # ─── 6. Dockerized Browser Sandbox (Chromium + CDP) ───────────────
+  browser-sandbox:
+    image: browserless/chrome:latest
+    container_name: openbot-browser-sandbox
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+      - "9222:9222"
+    environment:
+      - MAX_CONCURRENT_SESSIONS=5
+      - CONNECTION_TIMEOUT=600000
+
+  # ─── 7. Dockerized Phone Bridge (Physical USB ADB + Screen Stream)
+  phone-bridge:
+    build:
+      context: ./docker/phone-bridge
+      dockerfile: Dockerfile
+    container_name: openbot-phone-bridge
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "5037:5037"
+      - "5555:5555"
+      - "8000:8000"
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+    environment:
+      - WIRELESS_ADB_IP=${WIRELESS_ADB_IP:-}
+
 volumes:
   postgres_data:
   redis_data:
   ollama_models:
+  os_desktop_data:

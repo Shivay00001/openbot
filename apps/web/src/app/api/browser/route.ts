@@ -1,8 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+const DOCKER_BROWSER_URL = process.env.DOCKER_BROWSER_URL || 'http://localhost:3002';
+
+export async function GET() {
+  // Check if Docker browser sandbox is reachable
+  let isDockerBrowserOnline = false;
+  try {
+    const res = await fetch(`${DOCKER_BROWSER_URL}/pressure`, { signal: AbortSignal.timeout(1000) });
+    if (res.ok) isDockerBrowserOnline = true;
+  } catch {
+    isDockerBrowserOnline = false;
+  }
+
+  return NextResponse.json({
+    dockerBrowserOnline: isDockerBrowserOnline,
+    dockerBrowserUrl: DOCKER_BROWSER_URL,
+    capabilities: ['CDP', 'Headless Chromium', 'Live noVNC View', 'Full DOM Automation'],
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { url, action = 'navigate' } = await req.json();
+    const { url, action = 'navigate', format = 'json' } = await req.json();
 
     if (!url || typeof url !== 'string') {
       return NextResponse.json({ error: 'URL is required' }, { status: 400 });
@@ -11,6 +30,45 @@ export async function POST(req: NextRequest) {
     const targetUrl = url.startsWith('http') ? url : `https://${url}`;
     const startTime = Date.now();
 
+    // Check if Docker Browserless is online
+    let isDockerBrowserOnline = false;
+    try {
+      const probe = await fetch(`${DOCKER_BROWSER_URL}/pressure`, { signal: AbortSignal.timeout(800) });
+      if (probe.ok) isDockerBrowserOnline = true;
+    } catch {
+      isDockerBrowserOnline = false;
+    }
+
+    // 1. Docker Browser Screenshot Action
+    if (action === 'screenshot' && isDockerBrowserOnline) {
+      try {
+        const shotRes = await fetch(`${DOCKER_BROWSER_URL}/screenshot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: targetUrl,
+            options: { fullPage: false, type: 'png' },
+          }),
+        });
+
+        if (shotRes.ok) {
+          const buffer = await shotRes.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString('base64');
+          return NextResponse.json({
+            success: true,
+            url: targetUrl,
+            mimeType: 'image/png',
+            screenshot: `data:image/png;base64,${base64}`,
+            source: 'docker-browserless-chromium',
+            durationMs: Date.now() - startTime,
+          });
+        }
+      } catch {
+        // fallback to standard HTML fetch
+      }
+    }
+
+    // 2. Standard Navigation & DOM Extraction
     const response = await fetch(targetUrl, {
       headers: {
         'User-Agent':
@@ -75,6 +133,8 @@ export async function POST(req: NextRequest) {
       wordCount: cleanText.split(/\s+/).length,
       links,
       content: cleanText,
+      dockerBrowserOnline: isDockerBrowserOnline,
+      dockerBrowserUrl: DOCKER_BROWSER_URL,
     });
   } catch (error: unknown) {
     return NextResponse.json({

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Smartphone, 
   Send, 
@@ -16,13 +16,21 @@ import {
   Wifi, 
   Battery, 
   Volume2, 
+  VolumeX,
+  Volume1,
+  Power,
   Sliders, 
   Sparkles,
   MessageSquare,
   Navigation,
   Car,
   Link2,
-  AlertCircle
+  AlertCircle,
+  Video,
+  Camera,
+  UploadCloud,
+  Layers,
+  Terminal
 } from 'lucide-react';
 
 interface AdbDevice {
@@ -41,21 +49,26 @@ export const PhoneModeView: React.FC = () => {
   const [wirelessIp, setWirelessIp] = useState('192.168.1.');
   const [isScanning, setIsScanning] = useState(false);
   const [screenshotData, setScreenshotData] = useState<string | null>(null);
+  const [useLiveStream, setUseLiveStream] = useState<boolean>(true);
+  const [dockerBridgeOnline, setDockerBridgeOnline] = useState<boolean>(false);
+  const [streamUrl, setStreamUrl] = useState<string>('http://localhost:8000/stream');
 
   const [activeLog, setActiveLog] = useState<string[]>([
-    'System: Checking ADB daemon on host (tcp:5037)...',
+    'System: Initializing multi-device phone control bridge...',
+    'System: Checking ADB daemon & Docker phone-bridge (ports 5037, 8000)...',
   ]);
 
   const [autonomousGoal, setAutonomousGoal] = useState('');
   const [isExecuting, setIsExecuting] = useState(false);
+  const [textInputVal, setTextInputVal] = useState('');
 
-  // Scan real ADB devices on mount
+  // Scan real ADB devices & Docker bridge on mount
   useEffect(() => {
     scanAdbDevices();
   }, []);
 
   const addLog = (msg: string) => {
-    setActiveLog((prev) => [msg, ...prev.slice(0, 15)]);
+    setActiveLog((prev) => [msg, ...prev.slice(0, 20)]);
   };
 
   const scanAdbDevices = async () => {
@@ -67,13 +80,18 @@ export const PhoneModeView: React.FC = () => {
         installed: data.adbInstalled,
         devices: data.devices || [],
       });
+      setDockerBridgeOnline(!!data.dockerBridgeOnline);
+
+      if (data.dockerBridgeOnline) {
+        addLog('⚡ Docker Phone Bridge Online (:8000) — Direct USB & Wireless Hardware active!');
+      }
 
       if (data.devices && data.devices.length > 0) {
         setSelectedDevice(data.devices[0].serial);
         addLog(`ADB: Found ${data.devices.length} connected device(s): ${data.devices[0].model} (${data.devices[0].serial})`);
         fetchDeviceScreenshot();
       } else {
-        addLog('ADB: Daemon active. No physical Android phone detected over USB/Wi-Fi. Virtual interactive simulator ready.');
+        addLog('ADB: Daemon active. Connect your physical Android phone via USB or enter Wi-Fi IP to pair.');
       }
     } catch (err: unknown) {
       addLog(`ADB Error: ${err instanceof Error ? err.message : 'Failed to query ADB'}`);
@@ -105,7 +123,7 @@ export const PhoneModeView: React.FC = () => {
       const data = await res.json();
       if (data.success && data.base64) {
         setScreenshotData(data.base64);
-        addLog('ADB: Captured real device screen mirror.');
+        addLog('ADB: Captured real device screen frame.');
       }
     } catch {
       // ignore
@@ -113,7 +131,7 @@ export const PhoneModeView: React.FC = () => {
   };
 
   const handleRealTap = async (x: number, y: number) => {
-    addLog(`Agent: Dispatching real tap to (${x}, ${y}) via ADB...`);
+    addLog(`Agent: Dispatching real tap to (${Math.round(x)}, ${Math.round(y)}) via ADB...`);
     try {
       const res = await fetch('/api/phone/adb', {
         method: 'POST',
@@ -123,15 +141,15 @@ export const PhoneModeView: React.FC = () => {
       const data = await res.json();
       if (data.success) {
         addLog(`ADB: ${data.message}`);
-        setTimeout(fetchDeviceScreenshot, 400);
+        if (!useLiveStream) setTimeout(fetchDeviceScreenshot, 400);
       }
     } catch {
       // fallback
     }
   };
 
-  const handleRealKey = async (keyCode: 'HOME' | 'BACK' | 'RECENT_APPS') => {
-    addLog(`Agent: Dispatching real hardware key: ${keyCode} via ADB...`);
+  const handleRealKey = async (keyCode: string) => {
+    addLog(`Agent: Dispatching hardware key: ${keyCode} via ADB...`);
     try {
       const res = await fetch('/api/phone/adb', {
         method: 'POST',
@@ -141,8 +159,24 @@ export const PhoneModeView: React.FC = () => {
       const data = await res.json();
       if (data.success) {
         addLog(`ADB: ${data.message}`);
-        setTimeout(fetchDeviceScreenshot, 400);
+        if (!useLiveStream) setTimeout(fetchDeviceScreenshot, 400);
       }
+    } catch {
+      // fallback
+    }
+  };
+
+  const handleSendText = async () => {
+    if (!textInputVal.trim()) return;
+    addLog(`Agent: Typing text "${textInputVal}" on Android phone...`);
+    try {
+      await fetch('/api/phone/adb', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'type', text: textInputVal }),
+      });
+      setTextInputVal('');
+      if (!useLiveStream) setTimeout(fetchDeviceScreenshot, 400);
     } catch {
       // fallback
     }
@@ -153,13 +187,14 @@ export const PhoneModeView: React.FC = () => {
     setIsExecuting(true);
     addLog(`Agentic Phone Controller: Received goal "${autonomousGoal}"`);
 
-    // Parse real action
     const goalLower = autonomousGoal.toLowerCase();
     let targetPkg = '';
     if (goalLower.includes('uber')) targetPkg = 'com.ubercab';
     else if (goalLower.includes('whatsapp')) targetPkg = 'com.whatsapp';
     else if (goalLower.includes('maps')) targetPkg = 'com.google.android.apps.maps';
     else if (goalLower.includes('youtube')) targetPkg = 'com.google.android.youtube';
+    else if (goalLower.includes('camera')) targetPkg = 'com.android.camera';
+    else if (goalLower.includes('settings')) targetPkg = 'com.android.settings';
     else targetPkg = 'com.android.chrome';
 
     addLog(`Agent: Launching target package "${targetPkg}" via ADB intent...`);
@@ -171,7 +206,7 @@ export const PhoneModeView: React.FC = () => {
       });
       const data = await res.json();
       addLog(`ADB Result: ${data.message || 'Launched intent successfully'}`);
-      setTimeout(fetchDeviceScreenshot, 1000);
+      setTimeout(fetchDeviceScreenshot, 800);
     } catch (err: unknown) {
       addLog(`ADB error: ${String(err)}`);
     } finally {
@@ -180,23 +215,32 @@ export const PhoneModeView: React.FC = () => {
     }
   };
 
+  const handleScreenClick = (e: React.MouseEvent<HTMLImageElement | HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    const normX = (clickX / rect.width) * 1080;
+    const normY = (clickY / rect.height) * 2400;
+    handleRealTap(normX, normY);
+  };
+
   return (
     <div
       id="agentic-phone-mode-container"
       style={{
         display: 'grid',
-        gridTemplateColumns: '420px 1fr 340px',
+        gridTemplateColumns: '430px 1fr 340px',
         height: 'calc(100vh - var(--header-height))',
         width: '100%',
-        padding: '20px 28px',
-        gap: '24px',
+        padding: '16px 24px',
+        gap: '20px',
         overflow: 'hidden',
       }}
     >
-      {/* Column 1: Smartphone Device Viewport */}
+      {/* Column 1: Physical Phone Mirror & Hardware Controls */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-        <div className="phone-mockup-frame" id="virtual-phone-simulator">
-          {/* Dynamic Island */}
+        <div className="phone-mockup-frame" id="virtual-phone-simulator" style={{ width: '340px', height: '620px' }}>
+          {/* Dynamic Island Header */}
           <div className="phone-island">
             <span style={{ fontSize: '11px', color: '#fff', fontWeight: 600 }}>9:41</span>
             <div className="phone-camera-dot" />
@@ -206,58 +250,68 @@ export const PhoneModeView: React.FC = () => {
             </div>
           </div>
 
-          {/* Screen Content: Real Screencap OR Virtual Simulator */}
+          {/* Screen Content: Live Stream OR Screencap OR Virtual Simulator */}
           <div
             style={{
               flex: 1,
               marginTop: '44px',
-              padding: '16px',
-              background: screenshotData ? '#000' : 'linear-gradient(180deg, #1e1b4b 0%, #0f172a 100%)',
+              padding: '0',
+              background: '#090d16',
               display: 'flex',
               flexDirection: 'column',
               position: 'relative',
-              overflowY: 'auto',
+              overflow: 'hidden',
             }}
           >
-            {screenshotData ? (
+            {useLiveStream && dockerBridgeOnline ? (
+              <img
+                src={streamUrl}
+                alt="Live Android Hardware Screen"
+                style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: 'crosshair' }}
+                onClick={handleScreenClick}
+                onError={() => {
+                  setUseLiveStream(false);
+                  fetchDeviceScreenshot();
+                }}
+              />
+            ) : screenshotData ? (
               <img
                 src={screenshotData}
-                alt="Live Phone Screen"
+                alt="Captured Android Screen"
                 style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: 'crosshair' }}
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const x = ((e.clientX - rect.left) / rect.width) * 1080;
-                  const y = ((e.clientY - rect.top) / rect.height) * 2400;
-                  handleRealTap(x, y);
-                }}
+                onClick={handleScreenClick}
               />
             ) : (
               /* Virtual Android Display fallback */
-              <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                  <span style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>
-                    {adbStatus.devices.length > 0 ? adbStatus.devices[0].model : 'Pixel 8 Simulator'}
+              <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: '#fff' }}>
+                    {adbStatus.devices.length > 0 ? adbStatus.devices[0].model : 'Android Device'}
                   </span>
                   <span className={adbStatus.devices.length > 0 ? 'badge badge-emerald' : 'badge badge-amber'}>
-                    {adbStatus.devices.length > 0 ? 'Physical Phone' : 'Virtual Mode'}
+                    {adbStatus.devices.length > 0 ? 'Hardware Online' : 'Simulator'}
                   </span>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '18px', marginTop: '10px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginTop: '10px' }}>
                   {[
-                    { name: 'WhatsApp', icon: <MessageSquare size={22} />, pkg: 'com.whatsapp' },
-                    { name: 'Uber', icon: <Car size={22} />, pkg: 'com.ubercab' },
-                    { name: 'Maps', icon: <Navigation size={22} />, pkg: 'com.google.android.apps.maps' },
-                    { name: 'Chrome', icon: <Smartphone size={22} />, pkg: 'com.android.chrome' },
+                    { name: 'WhatsApp', icon: <MessageSquare size={20} />, pkg: 'com.whatsapp' },
+                    { name: 'Uber', icon: <Car size={20} />, pkg: 'com.ubercab' },
+                    { name: 'Maps', icon: <Navigation size={20} />, pkg: 'com.google.android.apps.maps' },
+                    { name: 'Chrome', icon: <Smartphone size={20} />, pkg: 'com.android.chrome' },
+                    { name: 'YouTube', icon: <Video size={20} />, pkg: 'com.google.android.youtube' },
+                    { name: 'Camera', icon: <Camera size={20} />, pkg: 'com.android.camera' },
+                    { name: 'Settings', icon: <Sliders size={20} />, pkg: 'com.android.settings' },
+                    { name: 'Terminal', icon: <Terminal size={20} />, pkg: 'com.termux' },
                   ].map((app, idx) => (
                     <button
                       key={idx}
-                      onClick={() => handleRealTap(100 + idx * 80, 200)}
+                      onClick={() => handleRealTap(100 + (idx % 4) * 80, 200 + Math.floor(idx / 4) * 80)}
                       style={{
                         display: 'flex',
                         flexDirection: 'column',
                         alignItems: 'center',
-                        gap: '8px',
+                        gap: '6px',
                         background: 'none',
                         border: 'none',
                         cursor: 'pointer',
@@ -265,11 +319,11 @@ export const PhoneModeView: React.FC = () => {
                     >
                       <div
                         style={{
-                          width: '54px',
-                          height: '54px',
-                          borderRadius: '16px',
+                          width: '48px',
+                          height: '48px',
+                          borderRadius: '14px',
                           background: 'linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,255,255,0.05))',
-                          border: '1px solid rgba(255,255,255,0.2)',
+                          border: '1px solid rgba(255,255,255,0.18)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
@@ -278,7 +332,7 @@ export const PhoneModeView: React.FC = () => {
                       >
                         {app.icon}
                       </div>
-                      <span style={{ fontSize: '11px', color: '#e2e8f0' }}>{app.name}</span>
+                      <span style={{ fontSize: '10px', color: '#e2e8f0' }}>{app.name}</span>
                     </button>
                   ))}
                 </div>
@@ -286,185 +340,317 @@ export const PhoneModeView: React.FC = () => {
                 <div
                   style={{
                     marginTop: 'auto',
-                    background: 'rgba(0, 0, 0, 0.4)',
-                    padding: '12px',
+                    background: 'rgba(0, 0, 0, 0.5)',
+                    padding: '10px',
                     borderRadius: '8px',
                     fontSize: '11px',
                     color: 'var(--text-muted)',
+                    textAlign: 'center',
                   }}
                 >
-                  Click any coordinate to dispatch real \`adb shell input tap\` command.
+                  Direct Touch Enabled • Click screen to tap real coordinates
                 </div>
               </div>
             )}
           </div>
 
-          {/* Android Navigation Keys */}
+          {/* Physical Phone Navigation Buttons Bar */}
           <div
             style={{
-              height: '48px',
-              background: '#090a0f',
+              height: '44px',
+              background: '#090d16',
+              borderTop: '1px solid rgba(255,255,255,0.08)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-around',
-              borderTop: '1px solid rgba(255,255,255,0.08)',
+              padding: '0 20px',
             }}
           >
             <button
               onClick={() => handleRealKey('BACK')}
+              title="Back (Keycode 4)"
               style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
-              title="Real Back Keyevent"
             >
               <ArrowLeft size={18} />
             </button>
             <button
               onClick={() => handleRealKey('HOME')}
-              style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}
-              title="Real Home Keyevent"
+              title="Home (Keycode 3)"
+              style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
             >
               <Home size={18} />
             </button>
             <button
               onClick={() => handleRealKey('RECENT_APPS')}
+              title="Recent Apps (Keycode 187)"
               style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
-              title="Real App Switcher"
             >
               <Square size={16} />
             </button>
+            <button
+              onClick={() => handleRealKey('POWER')}
+              title="Power / Lock (Keycode 26)"
+              style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}
+            >
+              <Power size={16} />
+            </button>
           </div>
+        </div>
+
+        {/* Quick Hardware Controls Bar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px' }}>
+          <button
+            onClick={() => handleRealKey('VOLUME_DOWN')}
+            className="btn btn-secondary"
+            style={{ padding: '6px 12px', fontSize: '11px' }}
+            title="Volume Down"
+          >
+            <Volume1 size={13} /> Vol -
+          </button>
+          <button
+            onClick={() => handleRealKey('VOLUME_UP')}
+            className="btn btn-secondary"
+            style={{ padding: '6px 12px', fontSize: '11px' }}
+            title="Volume Up"
+          >
+            <Volume2 size={13} /> Vol +
+          </button>
+          <button
+            onClick={fetchDeviceScreenshot}
+            className="btn btn-secondary"
+            style={{ padding: '6px 12px', fontSize: '11px' }}
+            title="Capture Screenshot"
+          >
+            <Camera size={13} /> Snap
+          </button>
+          <button
+            onClick={() => setUseLiveStream(!useLiveStream)}
+            className={`btn ${useLiveStream ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ padding: '6px 12px', fontSize: '11px' }}
+            title="Toggle Live Stream"
+          >
+            <Video size={13} /> {useLiveStream ? 'Live Stream' : 'Static'}
+          </button>
         </div>
       </div>
 
-      {/* Column 2: Agentic Automation & Real ADB Dispatch */}
+      {/* Column 2: Autonomous Goal Dispatcher & Real-Time Logcat */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto' }}>
-        {/* Banner */}
-        <div className="glass-panel" style={{ padding: '16px 20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Smartphone size={20} style={{ color: 'var(--accent-cyan)' }} />
-                <h2 style={{ fontSize: '18px' }}>Real Agentic Phone Mode (ADB Active)</h2>
-                <span className="badge badge-emerald">Real Hardware Bridge</span>
-              </div>
-              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                Directly connects to Android Debug Bridge daemon (tcp:5037) for real smartphone automation.
-              </p>
+        {/* Hardware Status Banner */}
+        <div className="glass-panel" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>
+                {adbStatus.devices.length > 0 ? `Physical Device: ${adbStatus.devices[0].model}` : 'Android Device Hub'}
+              </span>
+              <span className={adbStatus.devices.length > 0 ? 'badge badge-emerald' : 'badge badge-amber'}>
+                {adbStatus.devices.length > 0 ? `${adbStatus.devices[0].serial} (Active)` : 'Scanning'}
+              </span>
             </div>
-            <button onClick={scanAdbDevices} disabled={isScanning} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px' }}>
-              <RefreshCw className={isScanning ? 'spin-slow' : ''} size={14} />
-              <span>Scan USB/Wi-Fi</span>
-            </button>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Direct physical Android hardware control via Dockerized ADB & USB/Wi-Fi daemon.
+            </p>
           </div>
-        </div>
-
-        {/* Real ADB Wireless Connect Box */}
-        <div className="glass-panel" style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Wifi size={18} style={{ color: 'var(--accent-cyan)' }} />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: '12px', fontWeight: 600 }}>Wireless ADB Pairing:</div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Enter your phone IP address (Settings &gt; Developer Options &gt; Wireless Debugging)</div>
-          </div>
-          <input
-            type="text"
-            placeholder="192.168.1.50:5555"
-            value={wirelessIp}
-            onChange={(e) => setWirelessIp(e.target.value)}
-            style={{ width: '180px', padding: '6px 10px', fontSize: '12px' }}
-          />
-          <button onClick={handleConnectWireless} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px' }}>
-            <Link2 size={13} />
-            <span>Connect</span>
+          <button
+            onClick={scanAdbDevices}
+            disabled={isScanning}
+            className="btn btn-secondary"
+            style={{ padding: '8px 14px', fontSize: '12px' }}
+          >
+            <RefreshCw className={isScanning ? 'spin-slow' : ''} size={14} />
+            <span>Scan Devices</span>
           </button>
         </div>
 
-        {/* Autonomous Goal Dispatcher */}
-        <div className="glass-panel" style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
-            Execute Autonomous Phone Action
-          </span>
+        {/* Autonomous Phone Action Dispatcher */}
+        <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Sparkles size={18} style={{ color: 'var(--accent-cyan)' }} />
+            <span style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>
+              Autonomous Android Agent
+            </span>
+          </div>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            Give any goal in plain English (e.g. <i>"Open WhatsApp and send message"</i>, <i>"Book an Uber"</i>, <i>"Open YouTube"</i>).
+          </p>
           <div style={{ display: 'flex', gap: '10px' }}>
             <input
-              id="phone-goal-input"
               type="text"
-              placeholder="e.g. 'Launch WhatsApp', 'Open YouTube', 'Launch Uber'..."
               value={autonomousGoal}
               onChange={(e) => setAutonomousGoal(e.target.value)}
-              style={{ flex: 1 }}
+              onKeyDown={(e) => e.key === 'Enter' && executeAutonomousGoal()}
+              placeholder="e.g. Open WhatsApp or Uber to book ride..."
+              style={{
+                flex: 1,
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '10px 14px',
+                color: '#fff',
+                fontSize: '13px',
+              }}
             />
             <button
-              id="btn-execute-phone-goal"
               onClick={executeAutonomousGoal}
               disabled={isExecuting || !autonomousGoal.trim()}
               className="btn btn-primary"
+              style={{ padding: '10px 20px', fontSize: '13px' }}
             >
               {isExecuting ? <RefreshCw className="spin-slow" size={15} /> : <Play size={15} />}
-              <span>{isExecuting ? 'Dispatching...' : 'Run Real Action'}</span>
+              <span>Dispatch</span>
+            </button>
+          </div>
+
+          {/* Quick Hardware Text Input Bar */}
+          <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
+            <input
+              type="text"
+              value={textInputVal}
+              onChange={(e) => setTextInputVal(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
+              placeholder="Inject keyboard text directly onto phone screen..."
+              style={{
+                flex: 1,
+                background: 'rgba(0, 0, 0, 0.25)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '8px 12px',
+                color: '#cbd5e1',
+                fontSize: '12px',
+              }}
+            />
+            <button
+              onClick={handleSendText}
+              disabled={!textInputVal.trim()}
+              className="btn btn-secondary"
+              style={{ padding: '8px 16px', fontSize: '12px' }}
+            >
+              <Send size={13} /> Type
             </button>
           </div>
         </div>
 
-        {/* Live Execution Activity Stream */}
-        <div className="glass-panel" style={{ flex: 1, padding: '16px 20px', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-              Real ADB Perception & Log Stream
+        {/* Live ADB Protocol & Execution Logs */}
+        <div
+          className="glass-panel"
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            minHeight: '220px',
+          }}
+        >
+          <div
+            style={{
+              padding: '12px 16px',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Radio size={14} style={{ color: 'var(--accent-cyan)' }} />
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>
+                Hardware Bridge & ADB Event Stream
+              </span>
+            </div>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              Port 5037 • Kernel Input Dispatcher
             </span>
-            <span className="live-indicator" />
           </div>
 
           <div
-            id="phone-action-log-stream"
             style={{
               flex: 1,
+              padding: '14px',
               fontFamily: 'var(--font-mono)',
-              fontSize: '12px',
+              fontSize: '11.5px',
+              lineHeight: '1.7',
+              overflowY: 'auto',
               color: '#cbd5e1',
               display: 'flex',
               flexDirection: 'column',
-              gap: '8px',
-              overflowY: 'auto',
-              maxHeight: '260px',
+              gap: '6px',
             }}
           >
             {activeLog.map((log, idx) => (
-              <div key={idx} style={{ borderLeft: '2px solid var(--accent-cyan)', paddingLeft: '8px' }}>
-                {log}
+              <div key={idx} style={{ display: 'flex', gap: '8px' }}>
+                <span style={{ color: 'var(--accent-cyan)', userSelect: 'none' }}>&gt;</span>
+                <span>{log}</span>
               </div>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Column 3: Hardware Telemetry */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        <div className="glass-panel" style={{ padding: '16px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--accent-cyan)', marginBottom: '10px' }}>
-            ADB Hardware Status
-          </span>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>ADB Daemon</span>
-              <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>Running (tcp:5037)</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Devices Attached</span>
-              <span style={{ color: adbStatus.devices.length > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
-                {adbStatus.devices.length} device(s)
-              </span>
-            </div>
-            {adbStatus.devices.length > 0 && (
-              <div style={{ background: 'rgba(16, 185, 129, 0.1)', padding: '8px', borderRadius: '4px', border: '1px solid var(--accent-emerald)' }}>
-                <div style={{ fontWeight: 600, color: '#fff' }}>{adbStatus.devices[0].model}</div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{adbStatus.devices[0].serial}</div>
-              </div>
-            )}
+      {/* Column 3: Wireless ADB Pairing & Device Hardware Settings */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto' }}>
+        {/* Wireless ADB Connect Card */}
+        <div className="glass-panel" style={{ padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Wifi size={16} style={{ color: 'var(--accent-cyan)' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
+              Wireless ADB Pairing
+            </span>
           </div>
-
-          <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
-            <button onClick={fetchDeviceScreenshot} className="btn btn-secondary" style={{ width: '100%', fontSize: '11px', padding: '8px' }}>
-              📸 Request Live Screencap
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            Enable <b>Wireless Debugging</b> in Developer Options on your phone and enter the IP address:
+          </p>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              type="text"
+              value={wirelessIp}
+              onChange={(e) => setWirelessIp(e.target.value)}
+              placeholder="192.168.1.xxx:5555"
+              style={{
+                flex: 1,
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '8px 10px',
+                color: '#fff',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+              }}
+            />
+            <button
+              onClick={handleConnectWireless}
+              className="btn btn-secondary"
+              style={{ padding: '8px 14px', fontSize: '12px' }}
+            >
+              <Link2 size={13} /> Connect
             </button>
+          </div>
+        </div>
+
+        {/* Multi-Device Architecture Specs */}
+        <div className="glass-panel" style={{ padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
+            Device Bridge Architecture
+          </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '6px' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Direct USB Passthrough</span>
+              <span style={{ color: '#10b981', fontWeight: 600 }}>/dev/bus/usb</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '6px' }}>
+              <span style={{ color: 'var(--text-muted)' }}>ADB Daemon Port</span>
+              <span style={{ color: 'var(--accent-cyan)' }}>0.0.0.0:5037</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '6px' }}>
+              <span style={{ color: 'var(--text-muted)' }}>MJPEG Screen Stream</span>
+              <span style={{ color: 'var(--accent-cyan)' }}>:8000/stream</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '6px' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Touch Coordinate Scale</span>
+              <span style={{ color: '#fff' }}>1080 x 2400 px</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Accessibility Daemon</span>
+              <span style={{ color: '#10b981' }}>Active (Port 8765)</span>
+            </div>
           </div>
         </div>
       </div>

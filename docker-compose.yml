@@ -87,6 +87,8 @@ services:
       - REDIS_URL=redis://redis:6379
       - AI_ENGINE_URL=http://ai-engine:4001
       - JWT_SECRET=${JWT_SECRET:-dev_jwt_secret_key_change_in_prod}
+      - ADB_HOST=phone-bridge
+      - ADB_PORT=5037
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,11 +114,66 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-openbot_user}:${POSTGRES_PASSWORD:-openbot_secret_password}@postgres:5432/${POSTGRES_DB:-openbot}?schema=public
       - REDIS_URL=redis://redis:6379
       - OLLAMA_BASE_URL=http://ollama:11434
+      - ADB_HOST=phone-bridge
+      - ADB_PORT=5037
+      - NEXT_PUBLIC_DOCKER_OS_URL=http://localhost:6080
+      - NEXT_PUBLIC_DOCKER_BROWSER_URL=http://localhost:3002
+      - NEXT_PUBLIC_PHONE_STREAM_URL=http://localhost:8000/stream
     depends_on:
       api-gateway:
         condition: service_started
+
+  # ─── 7. Dockerized OS Desktop Sandbox (Full Ubuntu GUI + noVNC) ────
+  os-desktop:
+    image: lscr.io/linuxserver/webtop:ubuntu-xfce
+    container_name: openbot-os-desktop
+    restart: unless-stopped
+    shm_size: "1gb"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - SUBFOLDER=/
+      - TITLE=OpenBot OS Desktop
+    ports:
+      - "6080:3000"
+    volumes:
+      - os_desktop_data:/config
+      - ../..:/workspace
+
+  # ─── 8. Dockerized Browser Sandbox (Chromium + CDP + Remote Playwright)
+  browser-sandbox:
+    image: browserless/chrome:latest
+    container_name: openbot-browser-sandbox
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+      - "9222:9222"
+    environment:
+      - MAX_CONCURRENT_SESSIONS=10
+      - CONNECTION_TIMEOUT=600000
+      - CHROME_REFRESH_TIME=3600000
+      - DEFAULT_BLOCK_ADS=true
+
+  # ─── 9. Dockerized Phone Bridge (Physical USB ADB + Wireless ADB + Screen Stream)
+  phone-bridge:
+    build:
+      context: ./docker/phone-bridge
+      dockerfile: Dockerfile
+    container_name: openbot-phone-bridge
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "5037:5037"
+      - "5555:5555"
+      - "8000:8000"
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+    environment:
+      - WIRELESS_ADB_IP=${WIRELESS_ADB_IP:-}
 
 volumes:
   postgres_data:
   redis_data:
   ollama_models:
+  os_desktop_data:

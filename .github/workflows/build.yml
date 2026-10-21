@@ -1,0 +1,70 @@
+name: Build & One-Click Test Suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: # Manual one-click trigger in GitHub Actions UI
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── 1. Lint, Typecheck & Vitest Suite ───────────────────────────
+  verify:
+    name: Test & Build Integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Generate Prisma Client
+        run: npm run db:generate --workspace=@openbot/database
+
+      - name: Run Core Automation Suite (Vitest)
+        run: npm run test --workspace=@openbot/core
+
+      - name: Build All Packages & Web Application
+        run: |
+          npm run build --workspace=@openbot/shared-types
+          npm run build --workspace=@openbot/database
+          npm run build --workspace=@openbot/core
+          npm run build --workspace=@openbot/api-gateway
+          npm run build --workspace=@openbot/ai-engine
+          npm run build --workspace=@openbot/web
+
+  # ─── 2. Docker Containers Build Verification ────────────────────
+  docker-build:
+    name: Docker One-Click Image Build
+    runs-on: ubuntu-latest
+    needs: [verify]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: actions/setup-buildx-action@v3
+
+      - name: Build Phone Bridge Container
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docker/phone-bridge
+          file: ./docker/phone-bridge/Dockerfile
+          push: false
+          tags: openbot/phone-bridge:latest
+
+      - name: Validate Docker Compose Configuration
+        run: |
+          docker compose -f docker-compose.yml config
+          docker compose -f docker-compose.one-click.yml config
