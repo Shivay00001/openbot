@@ -177,9 +177,11 @@ export type {
 export {
   SkillEngine,
   BUILTIN_SKILLS,
+  AgentSkillsLoader,
 } from './skills/index.js';
 export type {
   RecordedAction,
+  DiscoveredAgentSkill,
 } from './skills/index.js';
 
 // Multi-Device Edge Node Servers & Human-Like Orchestrator 🧠⚡

@@ -18,8 +18,11 @@ import { v4 as uuid } from 'uuid';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Skill, SkillDefinition, SkillStep, SkillTrigger } from '../types/index.js';
+import { AgentSkillsLoader, type DiscoveredAgentSkill } from './agent-skills-loader.js';
 
 export type { Skill, SkillDefinition, SkillStep, SkillTrigger } from '../types/index.js';
+export { AgentSkillsLoader };
+export type { DiscoveredAgentSkill };
 import type { ToolRegistry } from '../tools/index.js';
 import type { ToolExecutionContext } from '../types/index.js';
 
@@ -241,6 +244,19 @@ export class SkillEngine {
   }
 
   // ─── CRUD ───────────────────────────────────────────────────
+
+  /**
+   * Dynamically loads all 176+ skills from the user's ai-agent-skills repository
+   */
+  loadAgentSkillsRepo(repoPath?: string): number {
+    const loader = new AgentSkillsLoader(repoPath);
+    const discovered = loader.scanSkills();
+    const converted = loader.convertToOpenBotSkills(discovered);
+    for (const skill of converted) {
+      this.skills.set(skill.id, skill);
+    }
+    return converted.length;
+  }
 
   getAllSkills(): Skill[] {
     return Array.from(this.skills.values());

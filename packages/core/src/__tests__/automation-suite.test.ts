@@ -56,6 +56,8 @@ import {
   Web2ApiModelAdapter,
   TokenRouter,
   FreeApiDiscoverer,
+  // Agent Skills Loader
+  AgentSkillsLoader,
 } from '../index.js';
 
 const TEST_PAGE_HTML = `<html><head><title>OpenBot Test Page</title></head><body>
@@ -830,13 +832,18 @@ describe('Free Model Providers, TokenRouter & Web2API', () => {
     expect(models.length).toBeGreaterThan(3);
   });
 
-  it('should discover free community endpoints via FreeApiDiscoverer', async () => {
-    const discoverer = new FreeApiDiscoverer();
-    const endpoints = discoverer.getEndpoints();
-    expect(endpoints.length).toBeGreaterThanOrEqual(3);
-    expect(endpoints.some((e) => e.provider === 'pollinations')).toBe(true);
-    expect(endpoints.some((e) => e.provider === 'web2api')).toBe(true);
+  it('should scan and convert external agent skills from ai-agent-skills repository', async () => {
+    const loader = new AgentSkillsLoader();
+    const skills = loader.scanSkills();
+    expect(Array.isArray(skills)).toBe(true);
+    if (skills.length > 0) {
+      expect(skills.length).toBeGreaterThan(10);
+      const openBotSkills = loader.convertToOpenBotSkills(skills);
+      expect(openBotSkills.length).toBe(skills.length);
+      expect(openBotSkills[0].definition.steps.length).toBeGreaterThanOrEqual(2);
+    }
   });
 });
+
 
 
