@@ -12,7 +12,15 @@ export { AgentLoop, createAgent } from './agent/index.js';
 export type { AgentConfig } from './agent/index.js';
 
 // Model Router & BYOK Providers
-export { ModelRouter, OpenAICompatibleAdapter, DEFAULT_PROVIDERS } from './models/index.js';
+export { 
+  ModelRouter, 
+  OpenAICompatibleAdapter, 
+  DEFAULT_PROVIDERS,
+  PollinationsModelAdapter,
+  Web2ApiModelAdapter,
+  TokenRouter,
+  FreeApiDiscoverer,
+} from './models/index.js';
 export type { ModelAdapter, CompletionParams, CompletionResult } from './models/index.js';
 
 // Local Model Weight & On-Device Inference System

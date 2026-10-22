@@ -7,6 +7,12 @@
 import OpenAI from 'openai';
 import { v4 as uuid } from 'uuid';
 import { zeroCloudGuard, ZeroCloudBlockedError, isLocalUrl } from '../security/zero-cloud.js';
+import { PollinationsModelAdapter } from './pollinations-adapter.js';
+import { Web2ApiModelAdapter } from './web2api-adapter.js';
+import { TokenRouter } from './token-router.js';
+import { FreeApiDiscoverer } from './free-api-discoverer.js';
+
+export { PollinationsModelAdapter, Web2ApiModelAdapter, TokenRouter, FreeApiDiscoverer };
 import type {
   ModelConfig,
   ModelProvider,
@@ -116,6 +122,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       case 'cohere': return 'https://api.cohere.com/v2';
       case 'ollama': return 'http://localhost:11434/v1';
       case 'lmstudio': return 'http://localhost:1234/v1';
+      case 'openrouter': return 'https://openrouter.ai/api/v1';
       case 'custom': return 'http://localhost:8080/v1';
       default: return 'http://localhost:11434/v1';
     }
@@ -343,12 +350,20 @@ export class ModelRouter {
     const key = `${config.provider}:${config.baseUrl || 'default'}`;
     let adapter = this.adapters.get(key);
     if (!adapter) {
-      // Auto-create adapter from config
-      adapter = new OpenAICompatibleAdapter({
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        provider: config.provider,
-      });
+      if (config.provider === 'pollinations') {
+        adapter = new PollinationsModelAdapter(config.baseUrl);
+      } else if (config.provider === 'web2api') {
+        adapter = new Web2ApiModelAdapter();
+      } else if (config.provider === 'tokenrouter') {
+        adapter = new TokenRouter();
+      } else {
+        // Auto-create adapter from config
+        adapter = new OpenAICompatibleAdapter({
+          apiKey: config.apiKey,
+          baseUrl: config.baseUrl,
+          provider: config.provider,
+        });
+      }
       this.adapters.set(key, adapter);
     }
     return adapter;
@@ -486,11 +501,43 @@ export const DEFAULT_PROVIDERS: Omit<ModelProviderConfig, 'apiKey'>[] = [
     models: ['llama3.1:8b', 'llama3.1:70b', 'mistral:7b', 'qwen2.5-coder:7b', 'gemma3:4b'],
   },
   {
-    provider: 'lmstudio',
-    displayName: 'LM Studio (Local)',
-    icon: 'lmstudio',
-    isLocal: true,
-    baseUrl: 'http://localhost:1234/v1',
-    models: [],
+    provider: 'tokenrouter',
+    displayName: 'TokenRouter (Auto Free Load Balancer)',
+    icon: 'shuffle',
+    isLocal: false,
+    models: ['tokenrouter:auto', 'tokenrouter:fastest'],
+  },
+  {
+    provider: 'pollinations',
+    displayName: 'Pollinations AI (100% Free - No Key)',
+    icon: 'sparkles',
+    isLocal: false,
+    baseUrl: 'https://text.pollinations.ai',
+    models: ['openai', 'deepseek', 'deepseek-r1', 'mistral', 'qwen', 'gemini', 'claude-hybrid'],
+  },
+  {
+    provider: 'web2api',
+    displayName: 'Web2API (DuckDuckGo / Web Chatbots)',
+    icon: 'globe',
+    isLocal: false,
+    models: [
+      'duckduckgo:gpt-4o-mini',
+      'duckduckgo:claude-3-haiku',
+      'duckduckgo:llama-3.3-70b',
+      'duckduckgo:mixtral-8x7b',
+    ],
+  },
+  {
+    provider: 'openrouter',
+    displayName: 'OpenRouter Free Tier',
+    icon: 'cpu',
+    isLocal: false,
+    baseUrl: 'https://openrouter.ai/api/v1',
+    models: [
+      'deepseek/deepseek-r1:free',
+      'meta-llama/llama-3.2-3b-instruct:free',
+      'google/gemini-2.0-flash-exp:free',
+      'qwen/qwen-2.5-72b-instruct:free',
+    ],
   },
 ];

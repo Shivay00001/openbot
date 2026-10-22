@@ -15,6 +15,10 @@ export type ModelProvider =
   | 'deepseek'
   | 'ollama'
   | 'lmstudio'
+  | 'pollinations'
+  | 'web2api'
+  | 'tokenrouter'
+  | 'openrouter'
   | 'custom';
 
 export interface ModelConfig {

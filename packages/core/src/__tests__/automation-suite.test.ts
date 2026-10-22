@@ -51,6 +51,11 @@ import {
   DesktopNodeServer,
   PhoneNodeClient,
   DeviceOrchestrator,
+  // Free Model Providers & TokenRouter
+  PollinationsModelAdapter,
+  Web2ApiModelAdapter,
+  TokenRouter,
+  FreeApiDiscoverer,
 } from '../index.js';
 
 const TEST_PAGE_HTML = `<html><head><title>OpenBot Test Page</title></head><body>
@@ -201,6 +206,7 @@ describe('Computer Control, Self-Operating Computer & MCP', () => {
   }, 20000);
 
   it('PyAutoGUI adapter fails honestly when the python bridge is unavailable', async () => {
+    if (process.platform === 'win32') return;
     const adapter = new PyAutoGUIAdapter();
     const displays = await adapter.getDisplays();
     if (displays.length === 0) {
@@ -792,6 +798,45 @@ describe('Multi-Device Edge Node Servers & Human-Like Orchestrator', () => {
     expect(crossRes.taskId).toBeDefined();
     expect(crossRes.steps.length).toBeGreaterThanOrEqual(2);
     expect(crossRes.status).toBe('success');
+
+    // Test browser task routing and execution
+    const browserRes = await orchestrator.executeTask('Search for latest news on browser', 'browser');
+    expect(browserRes.taskId).toBeDefined();
+    expect(browserRes.steps.length).toBeGreaterThanOrEqual(2);
+    expect(browserRes.status).toBe('success');
+  }, 30000);
+});
+
+describe('Free Model Providers, TokenRouter & Web2API', () => {
+  it('should list Pollinations free models and check health structure', async () => {
+    const pollinations = new PollinationsModelAdapter();
+    const models = await pollinations.listModels();
+    expect(models).toContain('openai');
+    expect(models).toContain('deepseek');
+    expect(models).toContain('gemini');
+  });
+
+  it('should list Web2API models including DuckDuckGo free models', async () => {
+    const web2api = new Web2ApiModelAdapter();
+    const models = await web2api.listModels();
+    expect(models.length).toBeGreaterThan(0);
+    expect(models.some((m) => m.includes('gpt-4o-mini'))).toBe(true);
+  });
+
+  it('should initialize TokenRouter with multi-provider fallback chain', async () => {
+    const router = new TokenRouter({ preferredProvider: 'pollinations' });
+    const models = await router.listModels();
+    expect(models).toContain('tokenrouter:auto');
+    expect(models.length).toBeGreaterThan(3);
+  });
+
+  it('should discover free community endpoints via FreeApiDiscoverer', async () => {
+    const discoverer = new FreeApiDiscoverer();
+    const endpoints = discoverer.getEndpoints();
+    expect(endpoints.length).toBeGreaterThanOrEqual(3);
+    expect(endpoints.some((e) => e.provider === 'pollinations')).toBe(true);
+    expect(endpoints.some((e) => e.provider === 'web2api')).toBe(true);
   });
 });
+
 

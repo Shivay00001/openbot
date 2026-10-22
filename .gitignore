@@ -70,3 +70,8 @@ apps/*/src/**/*.js.map
 # Downloaded local model weights
 .openbot_models/
 **/.openbot_models/
+
+# Dist artifacts & binary outputs
+dist-artifacts/
+apps/web/public/downloads/
+*.exe

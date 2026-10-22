@@ -236,6 +236,7 @@ export class PhoneNodeClient {
    * Capture high-res screen frame
    */
   async captureScreen(): Promise<string> {
-    return this.adb.captureScreenshot();
+    const res = await this.adb.captureScreenshot();
+    return res.dataUrl || '';
   }
 }

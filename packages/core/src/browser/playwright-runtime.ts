@@ -32,30 +32,43 @@ function candidateExecutablePaths(): string[] {
   }
   if (process.env.CHROME_PATH) candidates.push(process.env.CHROME_PATH);
 
-  const cacheRoot =
-    process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(os.homedir(), '.cache', 'ms-playwright');
-  try {
-    if (fs.existsSync(cacheRoot)) {
-      const entries = fs
-        .readdirSync(cacheRoot)
-        .filter((e) => e.startsWith('chromium'))
-        .sort()
-        .reverse();
-      for (const entry of entries) {
-        candidates.push(
-          path.join(cacheRoot, entry, 'chrome-headless-shell-linux64', 'chrome-headless-shell'),
-          path.join(cacheRoot, entry, 'chrome-linux64', 'chrome'),
-          path.join(cacheRoot, entry, 'chrome-linux', 'chrome'),
-          path.join(cacheRoot, entry, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
-          path.join(cacheRoot, entry, 'chrome-win', 'chrome.exe')
-        );
+  const cacheRoots = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    path.join(os.homedir(), '.cache', 'ms-playwright'),
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'ms-playwright') : '',
+    path.join(os.homedir(), 'AppData', 'Local', 'ms-playwright'),
+  ].filter(Boolean) as string[];
+
+  for (const cacheRoot of cacheRoots) {
+    try {
+      if (fs.existsSync(cacheRoot)) {
+        const entries = fs
+          .readdirSync(cacheRoot)
+          .filter((e) => e.startsWith('chromium'))
+          .sort()
+          .reverse();
+        for (const entry of entries) {
+          candidates.push(
+            path.join(cacheRoot, entry, 'chrome-headless-shell-linux64', 'chrome-headless-shell'),
+            path.join(cacheRoot, entry, 'chrome-headless-shell-win64', 'chrome-headless-shell.exe'),
+            path.join(cacheRoot, entry, 'chrome-linux64', 'chrome'),
+            path.join(cacheRoot, entry, 'chrome-linux', 'chrome'),
+            path.join(cacheRoot, entry, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
+            path.join(cacheRoot, entry, 'chrome-win', 'chrome.exe'),
+            path.join(cacheRoot, entry, 'chrome-win64', 'chrome.exe')
+          );
+        }
       }
+    } catch {
+      // cache dir unreadable — fall through
     }
-  } catch {
-    // cache dir unreadable — fall through to system paths
   }
 
   candidates.push(
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
     '/usr/bin/google-chrome',
