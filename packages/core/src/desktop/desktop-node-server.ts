@@ -11,18 +11,25 @@ import { WindowsNativeDriver } from '../computer/windows-native-driver.js';
 export interface DesktopServerConfig {
   port?: number;
   host?: string;
+  authToken?: string;
+  requireAuth?: boolean;
 }
 
 export class DesktopNodeServer {
   private server?: http.Server;
   private port: number;
   private host: string;
+  private authToken: string;
+  private requireAuth: boolean;
   private driver: WindowsNativeDriver;
   private isRunning = false;
 
   constructor(config?: DesktopServerConfig) {
     this.port = config?.port || parseInt(process.env.DESKTOP_NODE_PORT || '4002', 10);
-    this.host = config?.host || '0.0.0.0';
+    // Security: Default to loopback (127.0.0.1) unless explicitly configured otherwise
+    this.host = config?.host || process.env.DESKTOP_NODE_HOST || '127.0.0.1';
+    this.authToken = config?.authToken || process.env.OPENBOT_EDGE_SECRET || '';
+    this.requireAuth = config?.requireAuth ?? (Boolean(this.authToken) || process.env.NODE_ENV === 'production');
     this.driver = new WindowsNativeDriver();
   }
 
@@ -39,7 +46,7 @@ export class DesktopNodeServer {
         // Enable CORS
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-openbot-token');
 
         if (req.method === 'OPTIONS') {
           res.writeHead(200);
@@ -48,6 +55,19 @@ export class DesktopNodeServer {
 
         const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
         const pathname = url.pathname;
+
+        // Security check: Validate edge token on protected endpoints
+        if (this.requireAuth && this.authToken && pathname !== '/health') {
+          const authHeader = req.headers.authorization || '';
+          const customHeader = req.headers['x-openbot-token'];
+          const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader;
+
+          if (bearerToken !== this.authToken && customHeader !== this.authToken) {
+            return this.jsonResponse(res, 401, {
+              error: 'Unauthorized: Invalid or missing OpenBot edge authentication token',
+            });
+          }
+        }
 
         try {
           // Parse JSON body if POST
@@ -76,6 +96,8 @@ export class DesktopNodeServer {
               os: process.platform,
               arch: process.arch,
               port: this.port,
+              host: this.host,
+              authRequired: this.requireAuth && Boolean(this.authToken),
               cursor,
               uptimeSeconds: process.uptime(),
             });
@@ -97,17 +119,36 @@ export class DesktopNodeServer {
           }
 
           if (pathname === '/action/mouse/move' && req.method === 'POST') {
-            const { x, y } = body;
+            let { x, y } = body;
             if (x === undefined || y === undefined) {
               return this.jsonResponse(res, 400, { error: 'x and y coordinates are required' });
             }
+
+            // High-DPI & Normalized coordinate mapping (0.0 to 1.0)
+            if (x > 0 && x <= 1.0 && y > 0 && y <= 1.0) {
+              const bounds = await this.driver.getDisplayBounds().catch(() => ({ width: 1920, height: 1080 }));
+              x = Math.round(x * bounds.width);
+              y = Math.round(y * bounds.height);
+            }
+
             const result = await this.driver.mouseMove(x, y);
-            return this.jsonResponse(res, 200, result);
+            return this.jsonResponse(res, 200, { ...result, x, y });
           }
 
           if (pathname === '/action/mouse/click' && req.method === 'POST') {
-            const { button = 'left', double = false } = body;
+            let { button = 'left', double = false, x, y } = body;
             const clickCount = double ? 2 : 1;
+
+            // If coordinates provided, move first with DPI scaling support
+            if (x !== undefined && y !== undefined) {
+              if (x > 0 && x <= 1.0 && y > 0 && y <= 1.0) {
+                const bounds = await this.driver.getDisplayBounds().catch(() => ({ width: 1920, height: 1080 }));
+                x = Math.round(x * bounds.width);
+                y = Math.round(y * bounds.height);
+              }
+              await this.driver.mouseMove(x, y);
+            }
+
             const result = await this.driver.mouseClick(button, clickCount);
             return this.jsonResponse(res, 200, result);
           }

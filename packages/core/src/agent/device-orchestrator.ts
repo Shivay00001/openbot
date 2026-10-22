@@ -39,11 +39,22 @@ export class DeviceOrchestrator {
   private desktopServer: DesktopNodeServer;
   private phoneClient: PhoneNodeClient;
   private laptopUrl: string;
+  private authToken: string;
 
-  constructor(config?: { laptopUrl?: string; phoneIp?: string }) {
+  constructor(config?: { laptopUrl?: string; phoneIp?: string; authToken?: string }) {
     this.laptopUrl = config?.laptopUrl || 'http://localhost:4002';
-    this.desktopServer = new DesktopNodeServer();
+    this.authToken = config?.authToken || process.env.OPENBOT_EDGE_SECRET || '';
+    this.desktopServer = new DesktopNodeServer({ authToken: this.authToken });
     this.phoneClient = new PhoneNodeClient({ phoneIp: config?.phoneIp });
+  }
+
+  private getLaptopHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+      headers['x-openbot-token'] = this.authToken;
+    }
+    return headers;
   }
 
   /**
@@ -55,7 +66,10 @@ export class DeviceOrchestrator {
   }> {
     let laptopStatus = { online: false, url: this.laptopUrl, details: null as any };
     try {
-      const res = await fetch(`${this.laptopUrl}/health`, { signal: AbortSignal.timeout(1200) });
+      const res = await fetch(`${this.laptopUrl}/health`, {
+        headers: this.getLaptopHeaders(),
+        signal: AbortSignal.timeout(1200),
+      });
       if (res.ok) {
         laptopStatus.online = true;
         laptopStatus.details = await res.json();
@@ -197,7 +211,10 @@ export class DeviceOrchestrator {
     steps.push(perceiveStep);
 
     try {
-      const capRes = await fetch(`${this.laptopUrl}/screen/capture`, { signal: AbortSignal.timeout(4000) });
+      const capRes = await fetch(`${this.laptopUrl}/screen/capture`, {
+        headers: this.getLaptopHeaders(),
+        signal: AbortSignal.timeout(4000),
+      });
       if (capRes.ok) {
         perceiveStep.status = 'completed';
         perceiveStep.observation = 'Captured 60FPS high-res desktop display frame';
@@ -223,7 +240,7 @@ export class DeviceOrchestrator {
     try {
       const moveRes = await fetch(`${this.laptopUrl}/action/mouse/move`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getLaptopHeaders(),
         body: JSON.stringify({ x: 960, y: 540, smooth: true }),
       });
       if (moveRes.ok) {
@@ -283,7 +300,7 @@ export class DeviceOrchestrator {
     try {
       await fetch(`${this.laptopUrl}/action/keyboard/type`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getLaptopHeaders(),
         body: JSON.stringify({ text: otp, cadence: true }),
       });
       typeStep.status = 'completed';

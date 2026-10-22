@@ -25,6 +25,7 @@ export class TokenRouter implements ModelAdapter {
   private readonly web2api = new Web2ApiModelAdapter();
   private readonly discoverer = new FreeApiDiscoverer();
   private readonly config: TokenRouterConfig;
+  private readonly circuitBreakers: Map<string, { failureCount: number; cooldownUntil: number }> = new Map();
 
   constructor(config: TokenRouterConfig = {}) {
     this.config = {
@@ -55,8 +56,15 @@ export class TokenRouter implements ModelAdapter {
   async complete(params: CompletionParams): Promise<CompletionResult> {
     const chain = this.config.fallbackChain || ['pollinations', 'web2api', 'ollama'];
     let lastError: Error | null = null;
+    const now = Date.now();
 
     for (const provider of chain) {
+      // Circuit Breaker check: skip if provider is in cooldown
+      const breaker = this.circuitBreakers.get(provider);
+      if (breaker && breaker.cooldownUntil > now) {
+        continue;
+      }
+
       try {
         if (provider === 'pollinations') {
           const modParams = {
@@ -66,7 +74,9 @@ export class TokenRouter implements ModelAdapter {
               model: params.modelConfig.model.replace(/^pollinations:/, '') || 'openai',
             },
           };
-          return await this.pollinations.complete(modParams);
+          const res = await this.pollinations.complete(modParams);
+          this.circuitBreakers.delete(provider); // reset on success
+          return res;
         } else if (provider === 'web2api') {
           const modParams = {
             ...params,
@@ -77,11 +87,20 @@ export class TokenRouter implements ModelAdapter {
                 : 'duckduckgo:gpt-4o-mini',
             },
           };
-          return await this.web2api.complete(modParams);
+          const res = await this.web2api.complete(modParams);
+          this.circuitBreakers.delete(provider); // reset on success
+          return res;
         }
       } catch (err: any) {
         lastError = err;
-        // Continue to next provider in fallback chain
+        // Trip or increment circuit breaker
+        const current = this.circuitBreakers.get(provider) || { failureCount: 0, cooldownUntil: 0 };
+        current.failureCount += 1;
+        // If 2 or more failures, trip breaker for 30 seconds
+        if (current.failureCount >= 2) {
+          current.cooldownUntil = Date.now() + 30000;
+        }
+        this.circuitBreakers.set(provider, current);
       }
     }
 

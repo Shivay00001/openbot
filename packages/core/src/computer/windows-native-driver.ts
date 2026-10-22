@@ -37,6 +37,26 @@ export class WindowsNativeDriver {
   }
 
   /**
+   * Get primary screen display bounds
+   */
+  async getDisplayBounds(): Promise<{ width: number; height: number }> {
+    if (!this.isWindows) {
+      return { width: 1920, height: 1080 };
+    }
+    try {
+      const psCommand = `powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height"`;
+      const { stdout } = await execAsync(psCommand);
+      const lines = stdout.trim().split(/\r?\n/).map((l) => parseInt(l.trim(), 10)).filter((n) => !isNaN(n));
+      if (lines.length >= 2) {
+        return { width: lines[0], height: lines[1] };
+      }
+    } catch {
+      // Fallback
+    }
+    return { width: 1920, height: 1080 };
+  }
+
+  /**
    * Move mouse cursor to coordinates
    */
   async mouseMove(x: number, y: number, options?: ComputerActionOptions): Promise<ComputerActionResult> {

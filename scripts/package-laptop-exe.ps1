@@ -33,6 +33,9 @@ using System.Windows.Forms;
 namespace OpenBot.LaptopEdge {
     public class Program {
         [DllImport("user32.dll")]
+        public static extern bool SetProcessDPIAware();
+
+        [DllImport("user32.dll")]
         public static extern bool SetCursorPos(int X, int Y);
 
         [DllImport("user32.dll")]
@@ -45,15 +48,26 @@ namespace OpenBot.LaptopEdge {
 
         private static HttpListener listener;
         private static bool isRunning = true;
+        private static string edgeSecret = "";
 
         [STAThread]
         public static void Main(string[] args) {
+            try { SetProcessDPIAware(); } catch {}
+            edgeSecret = Environment.GetEnvironmentVariable("OPENBOT_EDGE_SECRET") ?? "";
+
+            for (int i = 0; i < args.Length; i++) {
+                if (args[i] == "--secret" && i + 1 < args.Length) {
+                    edgeSecret = args[i + 1];
+                }
+            }
+
             Console.Title = "OpenBot Laptop Edge Server — Port 4002";
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.WriteLine("==============================================================================");
-            Console.WriteLine(" OpenBot Laptop Edge Server v1.0.0 (Native Win32 High-Performance Daemon)");
+            Console.WriteLine(" OpenBot Laptop Edge Server v1.1.0 (High-DPI Hardened Native Win32 Daemon)");
             Console.WriteLine(" Listening on http://localhost:4002/ & http://127.0.0.1:4002/");
-            Console.WriteLine(" Ready for Autonomous AI Motor & Screen Control");
+            Console.WriteLine(" Auth Protection: " + (!string.IsNullOrEmpty(edgeSecret) ? "ENABLED (Bearer / x-openbot-token)" : "DEV OPEN"));
+            Console.WriteLine(" High-DPI Aware: ENABLED (1:1 physical pixel coordinate precision)");
             Console.WriteLine("==============================================================================");
             Console.ResetColor();
 
@@ -86,7 +100,7 @@ namespace OpenBot.LaptopEdge {
             var res = ctx.Response;
             res.Headers.Add("Access-Control-Allow-Origin", "*");
             res.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            res.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
+            res.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization, x-openbot-token");
 
             if (req.HttpMethod == "OPTIONS") {
                 res.StatusCode = 200;
@@ -98,26 +112,51 @@ namespace OpenBot.LaptopEdge {
             string responseText = "{\"status\":\"ok\"}";
             res.ContentType = "application/json";
 
+            // Security Token Check
+            if (!string.IsNullOrEmpty(edgeSecret) && path != "/" && path != "/health") {
+                string authHdr = req.Headers["Authorization"] ?? "";
+                string custHdr = req.Headers["x-openbot-token"] ?? "";
+                string bearer = authHdr.StartsWith("Bearer ") ? authHdr.Substring(7).Trim() : authHdr;
+
+                if (bearer != edgeSecret && custHdr != edgeSecret) {
+                    res.StatusCode = 401;
+                    byte[] errBuf = Encoding.UTF8.GetBytes("{\"error\":\"Unauthorized: Invalid edge authentication token\"}");
+                    res.ContentLength64 = errBuf.Length;
+                    res.OutputStream.Write(errBuf, 0, errBuf.Length);
+                    res.Close();
+                    return;
+                }
+            }
+
             try {
                 if (path == "/" || path == "/health") {
-                    responseText = "{\"status\":\"online\",\"server\":\"OpenBot-Laptop-Edge-Win32\",\"port\":4002,\"os\":\"Windows\",\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}";
+                    var b = Screen.PrimaryScreen.Bounds;
+                    responseText = "{\"status\":\"online\",\"server\":\"OpenBot-Laptop-Edge-Win32\",\"port\":4002,\"os\":\"Windows\",\"dpiAware\":true,\"authRequired\":" + (!string.IsNullOrEmpty(edgeSecret) ? "true" : "false") + ",\"screenWidth\":" + b.Width + ",\"screenHeight\":" + b.Height + ",\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}";
                 } else if (path == "/screen/info") {
                     var b = Screen.PrimaryScreen.Bounds;
-                    responseText = "{\"width\":" + b.Width + ",\"height\":" + b.Height + ",\"primary\":true}";
+                    responseText = "{\"width\":" + b.Width + ",\"height\":" + b.Height + ",\"primary\":true,\"dpiAware\":true}";
                 } else if (path == "/action/mouse/move") {
                     using (var r = new StreamReader(req.InputStream, req.ContentEncoding)) {
                         string body = r.ReadToEnd();
-                        int x = ExtractInt(body, "x", 0);
-                        int y = ExtractInt(body, "y", 0);
+                        double xf = ExtractDouble(body, "x", 0);
+                        double yf = ExtractDouble(body, "y", 0);
+                        var b = Screen.PrimaryScreen.Bounds;
+                        int x = (xf > 0 && xf <= 1.0) ? (int)Math.Round(xf * b.Width) : (int)xf;
+                        int y = (yf > 0 && yf <= 1.0) ? (int)Math.Round(yf * b.Height) : (int)yf;
                         SetCursorPos(x, y);
                         responseText = "{\"success\":true,\"action\":\"move\",\"x\":" + x + ",\"y\":" + y + "}";
                     }
                 } else if (path == "/action/mouse/click") {
                     using (var r = new StreamReader(req.InputStream, req.ContentEncoding)) {
                         string body = r.ReadToEnd();
-                        int x = ExtractInt(body, "x", -1);
-                        int y = ExtractInt(body, "y", -1);
-                        if (x >= 0 && y >= 0) SetCursorPos(x, y);
+                        double xf = ExtractDouble(body, "x", -1);
+                        double yf = ExtractDouble(body, "y", -1);
+                        if (xf >= 0 && yf >= 0) {
+                            var b = Screen.PrimaryScreen.Bounds;
+                            int x = (xf > 0 && xf <= 1.0) ? (int)Math.Round(xf * b.Width) : (int)xf;
+                            int y = (yf > 0 && yf <= 1.0) ? (int)Math.Round(yf * b.Height) : (int)yf;
+                            SetCursorPos(x, y);
+                        }
                         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
                         Thread.Sleep(50);
                         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
@@ -157,6 +196,17 @@ namespace OpenBot.LaptopEdge {
                 int comma = json.IndexOfAny(new char[] { ',', '}' }, colon);
                 string val = json.Substring(colon + 1, comma - colon - 1).Trim();
                 return int.Parse(val);
+            } catch { return def; }
+        }
+
+        private static double ExtractDouble(string json, string key, double def) {
+            try {
+                int i = json.IndexOf("\"" + key + "\"");
+                if (i < 0) return def;
+                int colon = json.IndexOf(":", i);
+                int comma = json.IndexOfAny(new char[] { ',', '}' }, colon);
+                string val = json.Substring(colon + 1, comma - colon - 1).Trim();
+                return double.Parse(val, System.Globalization.CultureInfo.InvariantCulture);
             } catch { return def; }
         }
 
