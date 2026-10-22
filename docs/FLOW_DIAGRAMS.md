@@ -229,11 +229,36 @@ quadrantChart
     quadrant-3 Low Cost Web-Only Toys
     quadrant-4 Expensive Enterprise Cloud Agents
     "Manus AI": [0.85, 0.35]
-    "Claude Computer Use": [0.82, 0.65]
-    "Open-Interpreter": [0.60, 0.60]
-    "MultiOn": [0.75, 0.30]
+    "OpenAI Dots": [0.88, 0.40]
+    "Claude Duet": [0.82, 0.65]
+    "Muse": [0.70, 0.30]
+    "Hark": [0.65, 0.35]
+    "Wani": [0.60, 0.45]
+    "Fo by Wajo": [0.55, 0.50]
+    "Instinct": [0.50, 0.25]
+    "Cue": [0.65, 0.30]
+    "Wabi": [0.58, 0.38]
+    "Koshax": [0.62, 0.55]
+    "Grokbot": [0.78, 0.20]
     "OpenBot (Edge + Zero-Token)": [0.08, 0.95]
 ```
+
+### Competitor Battleground Breakdown
+
+| Competitor Platform | Primary Architecture & Focus | Critical Limitations vs. OpenBot | OpenBot Moat & Edge |
+|---|---|---|---|
+| **Manus AI** | Cloud VM browser sandbox | Cannot access user's local PC files or physical smartphone. Closed source. Expensive token fee. | **Native Win32 .exe & Android .apk with $0 token cost.** |
+| **OpenAI Dots / Operator** | Cloud-hosted computer use VM | Cloud telemetry risk (screens stream to OpenAI servers). Paid API tokens mandatory. No native Android APK. | **100% Zero-Cloud airgap + local/free inference.** |
+| **Claude Duet / Computer Use** | Vision-based desktop clicking | Expensive token cost per screenshot ($0.05–$0.20/frame). No physical Android service. Bot-like linear mouse vectors. | **Cubic Bézier human physics + Android Accessibility + $0 COGS.** |
+| **Muse** | Research & SaaS automation | Limited to browser tabs. Lacks direct OS device driver hooks and hardware daemons. | **Full multi-device hardware execution (PC + Phone + Web).** |
+| **Hark** | Audio/screen meeting assistant | Passive assistant. Lacks active autonomous terminal/OS tool execution and touch injection. | **Full ReAct agent with 39+ physical execution tools.** |
+| **Wani** | Workflow triggering agent | Closed cloud tool. Lacks airgap security, local weights catalog, and cross-device synchronization. | **Unified multi-device task context across PC, Phone, and Web.** |
+| **Fo by Wajo** | Mobile-centric agent | Phone-only focus. Lacks native Windows GDI capture, Bézier mouse interpolation, and desktop .exe daemon. | **True dual-edge synergy: Laptop (:4002) + Phone (:8765).** |
+| **Instinct** | Prompt prediction engine | Text/decision model only. Does not possess physical edge daemons for mouse, keyboard, or touch screen. | **Direct OS kinematics, GDI capture, and Android input injection.** |
+| **Cue** | SaaS workflow automation | Cloud SaaS API integrator. Dependent on external SaaS APIs; breaks without internet connection. | **Local-first execution, offline GGUF model support, and keyvault.** |
+| **Wabi** | Personal productivity chat | Chat interface wrapper. Cannot independently take over desktop screens or execute terminal pipelines. | **Autonomous physical computer & mobile device takeover.** |
+| **Koshax** | Desktop automation scripts | Script wrapper. Lacks Web2API free handshakes, Zero-Cloud airgap enforcement, and mobile APK service. | **Turnkey 10KB Win32 daemon + automated TokenRouter failover.** |
+| **Grokbot (xAI)** | Conversational real-time LLM | Pure language model. No physical device execution, no local screen perception on user hardware. | **Full physical agent with multi-modal vision perception and action.** |
 
 ---
 
