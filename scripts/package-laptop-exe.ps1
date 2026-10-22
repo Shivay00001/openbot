@@ -22,12 +22,12 @@ $CSharpCode = @"
 using System;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.Windows.Forms;
 
 namespace OpenBot.LaptopEdge {
@@ -43,10 +43,8 @@ namespace OpenBot.LaptopEdge {
 
         private const uint MOUSEEVENTF_LEFTDOWN = 0x02;
         private const uint MOUSEEVENTF_LEFTUP = 0x04;
-        private const uint MOUSEEVENTF_RIGHTDOWN = 0x08;
-        private const uint MOUSEEVENTF_RIGHTUP = 0x10;
 
-        private static HttpListener listener;
+        private static TcpListener listener;
         private static bool isRunning = true;
         private static string edgeSecret = "";
 
@@ -61,142 +59,137 @@ namespace OpenBot.LaptopEdge {
                 }
             }
 
-            Console.Title = "OpenBot Laptop Edge Server — Port 4002";
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine("==============================================================================");
-            Console.WriteLine(" OpenBot Laptop Edge Server v1.1.0 (High-DPI Hardened Native Win32 Daemon)");
-            Console.WriteLine(" Listening on http://localhost:4002/ & http://127.0.0.1:4002/");
-            Console.WriteLine(" Auth Protection: " + (!string.IsNullOrEmpty(edgeSecret) ? "ENABLED (Bearer / x-openbot-token)" : "DEV OPEN"));
-            Console.WriteLine(" High-DPI Aware: ENABLED (1:1 physical pixel coordinate precision)");
-            Console.WriteLine("==============================================================================");
-            Console.ResetColor();
-
-            listener = new HttpListener();
-            listener.Prefixes.Add("http://localhost:4002/");
-            listener.Prefixes.Add("http://127.0.0.1:4002/");
+            int port = 4002;
+            listener = new TcpListener(IPAddress.Loopback, port);
 
             try {
                 listener.Start();
-                Console.WriteLine("[INFO] HTTP server successfully started on port 4002.");
+                Console.WriteLine("[INFO] OpenBot Laptop Edge Server successfully started on port " + port);
             } catch (Exception ex) {
-                Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine("[ERROR] Could not start listener: " + ex.Message);
-                Console.ResetColor();
                 return;
             }
 
             while (isRunning) {
                 try {
-                    var ctx = listener.GetContext();
-                    ThreadPool.QueueUserWorkItem((state) => HandleRequest(ctx));
+                    var client = listener.AcceptTcpClient();
+                    ThreadPool.QueueUserWorkItem((state) => HandleClient(client));
                 } catch {
                     break;
                 }
             }
         }
 
-        private static void HandleRequest(HttpListenerContext ctx) {
-            var req = ctx.Request;
-            var res = ctx.Response;
-            res.Headers.Add("Access-Control-Allow-Origin", "*");
-            res.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            res.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization, x-openbot-token");
+        private static void HandleClient(TcpClient client) {
+            using (client)
+            using (var stream = client.GetStream()) {
+                var reader = new StreamReader(stream, Encoding.UTF8);
+                string reqLine = reader.ReadLine();
+                if (string.IsNullOrEmpty(reqLine)) return;
 
-            if (req.HttpMethod == "OPTIONS") {
-                res.StatusCode = 200;
-                res.Close();
-                return;
-            }
+                var parts = reqLine.Split(' ');
+                if (parts.Length < 2) return;
+                string method = parts[0].ToUpper();
+                string path = parts[1].ToLower();
 
-            string path = req.Url.AbsolutePath.ToLower();
-            string responseText = "{\"status\":\"ok\"}";
-            res.ContentType = "application/json";
+                // Read headers
+                string line;
+                int contentLength = 0;
+                string authHeader = "";
+                string customToken = "";
 
-            // Security Token Check
-            if (!string.IsNullOrEmpty(edgeSecret) && path != "/" && path != "/health") {
-                string authHdr = req.Headers["Authorization"] ?? "";
-                string custHdr = req.Headers["x-openbot-token"] ?? "";
-                string bearer = authHdr.StartsWith("Bearer ") ? authHdr.Substring(7).Trim() : authHdr;
+                while (!string.IsNullOrEmpty(line = reader.ReadLine())) {
+                    if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)) {
+                        int.TryParse(line.Substring(15).Trim(), out contentLength);
+                    } else if (line.StartsWith("Authorization:", StringComparison.OrdinalIgnoreCase)) {
+                        authHeader = line.Substring(14).Trim();
+                    } else if (line.StartsWith("x-openbot-token:", StringComparison.OrdinalIgnoreCase)) {
+                        customToken = line.Substring(16).Trim();
+                    }
+                }
 
-                if (bearer != edgeSecret && custHdr != edgeSecret) {
-                    res.StatusCode = 401;
-                    byte[] errBuf = Encoding.UTF8.GetBytes("{\"error\":\"Unauthorized: Invalid edge authentication token\"}");
-                    res.ContentLength64 = errBuf.Length;
-                    res.OutputStream.Write(errBuf, 0, errBuf.Length);
-                    res.Close();
+                if (method == "OPTIONS") {
+                    SendResponse(stream, 200, "{\"status\":\"ok\"}");
                     return;
                 }
-            }
 
-            try {
+                // Security Check
+                if (!string.IsNullOrEmpty(edgeSecret) && path != "/" && path != "/health") {
+                    string bearer = authHeader.StartsWith("Bearer ") ? authHeader.Substring(7).Trim() : authHeader;
+                    if (bearer != edgeSecret && customToken != edgeSecret) {
+                        SendResponse(stream, 401, "{\"error\":\"Unauthorized: Invalid edge authentication token\"}");
+                        return;
+                    }
+                }
+
+                string body = "";
+                if (contentLength > 0) {
+                    char[] buffer = new char[contentLength];
+                    int totalRead = 0;
+                    while (totalRead < contentLength) {
+                        int read = reader.Read(buffer, totalRead, contentLength - totalRead);
+                        if (read <= 0) break;
+                        totalRead += read;
+                    }
+                    body = new string(buffer, 0, totalRead);
+                }
+
                 if (path == "/" || path == "/health") {
                     var b = Screen.PrimaryScreen.Bounds;
-                    responseText = "{\"status\":\"online\",\"server\":\"OpenBot-Laptop-Edge-Win32\",\"port\":4002,\"os\":\"Windows\",\"dpiAware\":true,\"authRequired\":" + (!string.IsNullOrEmpty(edgeSecret) ? "true" : "false") + ",\"screenWidth\":" + b.Width + ",\"screenHeight\":" + b.Height + ",\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}";
+                    string res = "{\"status\":\"online\",\"server\":\"OpenBot-Laptop-Edge-Win32\",\"port\":4002,\"os\":\"Windows\",\"dpiAware\":true,\"authRequired\":" + (!string.IsNullOrEmpty(edgeSecret) ? "true" : "false") + ",\"screenWidth\":" + b.Width + ",\"screenHeight\":" + b.Height + ",\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}";
+                    SendResponse(stream, 200, res);
                 } else if (path == "/screen/info") {
                     var b = Screen.PrimaryScreen.Bounds;
-                    responseText = "{\"width\":" + b.Width + ",\"height\":" + b.Height + ",\"primary\":true,\"dpiAware\":true}";
+                    SendResponse(stream, 200, "{\"width\":" + b.Width + ",\"height\":" + b.Height + ",\"primary\":true,\"dpiAware\":true}");
                 } else if (path == "/action/mouse/move") {
-                    using (var r = new StreamReader(req.InputStream, req.ContentEncoding)) {
-                        string body = r.ReadToEnd();
-                        double xf = ExtractDouble(body, "x", 0);
-                        double yf = ExtractDouble(body, "y", 0);
+                    double xf = ExtractDouble(body, "x", 0);
+                    double yf = ExtractDouble(body, "y", 0);
+                    var b = Screen.PrimaryScreen.Bounds;
+                    int x = (xf > 0 && xf <= 1.0) ? (int)Math.Round(xf * b.Width) : (int)xf;
+                    int y = (yf > 0 && yf <= 1.0) ? (int)Math.Round(yf * b.Height) : (int)yf;
+                    SetCursorPos(x, y);
+                    SendResponse(stream, 200, "{\"success\":true,\"action\":\"move\",\"x\":" + x + ",\"y\":" + y + "}");
+                } else if (path == "/action/mouse/click") {
+                    double xf = ExtractDouble(body, "x", -1);
+                    double yf = ExtractDouble(body, "y", -1);
+                    if (xf >= 0 && yf >= 0) {
                         var b = Screen.PrimaryScreen.Bounds;
                         int x = (xf > 0 && xf <= 1.0) ? (int)Math.Round(xf * b.Width) : (int)xf;
                         int y = (yf > 0 && yf <= 1.0) ? (int)Math.Round(yf * b.Height) : (int)yf;
                         SetCursorPos(x, y);
-                        responseText = "{\"success\":true,\"action\":\"move\",\"x\":" + x + ",\"y\":" + y + "}";
                     }
-                } else if (path == "/action/mouse/click") {
-                    using (var r = new StreamReader(req.InputStream, req.ContentEncoding)) {
-                        string body = r.ReadToEnd();
-                        double xf = ExtractDouble(body, "x", -1);
-                        double yf = ExtractDouble(body, "y", -1);
-                        if (xf >= 0 && yf >= 0) {
-                            var b = Screen.PrimaryScreen.Bounds;
-                            int x = (xf > 0 && xf <= 1.0) ? (int)Math.Round(xf * b.Width) : (int)xf;
-                            int y = (yf > 0 && yf <= 1.0) ? (int)Math.Round(yf * b.Height) : (int)yf;
-                            SetCursorPos(x, y);
-                        }
-                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-                        Thread.Sleep(50);
-                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
-                        responseText = "{\"success\":true,\"action\":\"click\",\"button\":\"left\"}";
-                    }
+                    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                    Thread.Sleep(50);
+                    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                    SendResponse(stream, 200, "{\"success\":true,\"action\":\"click\",\"button\":\"left\"}");
                 } else if (path == "/action/keyboard/type") {
-                    using (var r = new StreamReader(req.InputStream, req.ContentEncoding)) {
-                        string body = r.ReadToEnd();
-                        string text = ExtractString(body, "text");
-                        SendKeys.SendWait(text);
-                        responseText = "{\"success\":true,\"action\":\"type\",\"chars\":" + text.Length + "}";
-                    }
+                    string text = ExtractString(body, "text");
+                    SendKeys.SendWait(text);
+                    SendResponse(stream, 200, "{\"success\":true,\"action\":\"type\",\"chars\":" + text.Length + "}");
                 } else if (path == "/action/app/launch") {
-                    using (var r = new StreamReader(req.InputStream, req.ContentEncoding)) {
-                        string body = r.ReadToEnd();
-                        string app = ExtractString(body, "appName");
-                        Process.Start(new ProcessStartInfo(app) { UseShellExecute = true });
-                        responseText = "{\"success\":true,\"action\":\"launchApp\",\"app\":\"" + app + "\"}";
-                    }
+                    string app = ExtractString(body, "appName");
+                    Process.Start(new ProcessStartInfo(app) { UseShellExecute = true });
+                    SendResponse(stream, 200, "{\"success\":true,\"action\":\"launchApp\",\"app\":\"" + app + "\"}");
+                } else {
+                    SendResponse(stream, 200, "{\"status\":\"ok\"}");
                 }
-            } catch (Exception ex) {
-                res.StatusCode = 500;
-                responseText = "{\"success\":false,\"error\":\"" + ex.Message.Replace("\"", "'") + "\"}";
             }
-
-            byte[] buf = Encoding.UTF8.GetBytes(responseText);
-            res.ContentLength64 = buf.Length;
-            res.OutputStream.Write(buf, 0, buf.Length);
-            res.Close();
         }
 
-        private static int ExtractInt(string json, string key, int def) {
-            try {
-                int i = json.IndexOf("\"" + key + "\"");
-                if (i < 0) return def;
-                int colon = json.IndexOf(":", i);
-                int comma = json.IndexOfAny(new char[] { ',', '}' }, colon);
-                string val = json.Substring(colon + 1, comma - colon - 1).Trim();
-                return int.Parse(val);
-            } catch { return def; }
+        private static void SendResponse(NetworkStream stream, int statusCode, string json) {
+            byte[] bodyBytes = Encoding.UTF8.GetBytes(json);
+            string statusMsg = statusCode == 200 ? "OK" : (statusCode == 401 ? "Unauthorized" : "Internal Error");
+            string header = "HTTP/1.1 " + statusCode + " " + statusMsg + "\r\n" +
+                            "Content-Type: application/json\r\n" +
+                            "Access-Control-Allow-Origin: *\r\n" +
+                            "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
+                            "Access-Control-Allow-Headers: Content-Type, Authorization, x-openbot-token\r\n" +
+                            "Content-Length: " + bodyBytes.Length + "\r\n" +
+                            "Connection: close\r\n\r\n";
+            byte[] headerBytes = Encoding.ASCII.GetBytes(header);
+            stream.Write(headerBytes, 0, headerBytes.Length);
+            stream.Write(bodyBytes, 0, bodyBytes.Length);
+            stream.Flush();
         }
 
         private static double ExtractDouble(string json, string key, double def) {
