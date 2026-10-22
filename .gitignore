@@ -9,6 +9,8 @@ dist/
 out/
 build/
 *.tsbuildinfo
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map
 
 # Environment
 .env

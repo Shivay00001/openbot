@@ -173,3 +173,11 @@ export {
 export type {
   RecordedAction,
 } from './skills/index.js';
+
+// Multi-Device Edge Node Servers & Human-Like Orchestrator 🧠⚡
+export { DesktopNodeServer } from './desktop/desktop-node-server.js';
+export type { DesktopServerConfig } from './desktop/desktop-node-server.js';
+export { PhoneNodeClient } from './phone/phone-node-client.js';
+export type { PhoneNodeConfig, PhoneScreenNode } from './phone/phone-node-client.js';
+export { DeviceOrchestrator } from './agent/device-orchestrator.js';
+export type { TargetDevice, DeviceTaskStep, DeviceTaskResult } from './agent/device-orchestrator.js';

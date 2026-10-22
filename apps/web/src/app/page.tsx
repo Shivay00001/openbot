@@ -10,6 +10,7 @@ import { BrowserModeView } from '../components/BrowserModeView';
 import { LocalWeightsView } from '../components/LocalWeightsView';
 import { SkillStudioView } from '../components/SkillStudioView';
 import { VoiceCallView } from '../components/VoiceCallView';
+import { EdgeNodesView } from '../components/EdgeNodesView';
 import { SettingsModal } from '../components/SettingsModal';
 import { 
   type AppMode, 
@@ -197,6 +198,12 @@ export default function OpenBotPage() {
               />
             </div>
           </>
+        )}
+
+        {currentMode === 'edge-nodes' && (
+          <div style={{ flex: 1, position: 'relative' }}>
+            <EdgeNodesView />
+          </div>
         )}
 
         {currentMode === 'phone' && (

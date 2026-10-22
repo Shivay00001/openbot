@@ -4,6 +4,7 @@
 
 export type AppMode = 
   | 'chat'
+  | 'edge-nodes'
   | 'phone'
   | 'desktop'
   | 'browser'

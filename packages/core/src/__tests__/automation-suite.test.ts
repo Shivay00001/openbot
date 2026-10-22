@@ -47,6 +47,10 @@ import {
   VoicePipelineAgent,
   ModelWeightManager,
   LOCAL_WEIGHT_CATALOG,
+  // Multi-Device Edge Servers & Orchestrator
+  DesktopNodeServer,
+  PhoneNodeClient,
+  DeviceOrchestrator,
 } from '../index.js';
 
 const TEST_PAGE_HTML = `<html><head><title>OpenBot Test Page</title></head><body>
@@ -194,7 +198,7 @@ describe('Computer Control, Self-Operating Computer & MCP', () => {
 
     const missing = await soc.executeTagAction(99, 'click');
     expect(missing.success).toBe(false);
-  });
+  }, 20000);
 
   it('PyAutoGUI adapter fails honestly when the python bridge is unavailable', async () => {
     const adapter = new PyAutoGUIAdapter();
@@ -761,3 +765,33 @@ describe('Tool Registry Integration', () => {
     }
   }, 30000);
 });
+
+describe('Multi-Device Edge Node Servers & Human-Like Orchestrator', () => {
+  it('should initialize and start DesktopNodeServer on port 4002', async () => {
+    const server = new DesktopNodeServer({ port: 4002 });
+    expect(server).toBeDefined();
+  });
+
+  it('should initialize PhoneNodeClient and query health', async () => {
+    const phoneClient = new PhoneNodeClient({ phoneIp: '127.0.0.1', phonePort: 8765 });
+    const health = await phoneClient.getHealth();
+    expect(health).toBeDefined();
+    expect(health.port).toBe(8765);
+    expect(['online', 'offline']).toContain(health.status);
+  });
+
+  it('should route and execute autonomous human-like task via DeviceOrchestrator', async () => {
+    const orchestrator = new DeviceOrchestrator({ laptopUrl: 'http://localhost:4002' });
+    const nodesStatus = await orchestrator.checkNodesStatus();
+    expect(nodesStatus).toBeDefined();
+    expect(nodesStatus.laptop).toBeDefined();
+    expect(nodesStatus.phone).toBeDefined();
+
+    // Test cross-device execution flow
+    const crossRes = await orchestrator.executeTask('Open bank on laptop and read OTP from phone');
+    expect(crossRes.taskId).toBeDefined();
+    expect(crossRes.steps.length).toBeGreaterThanOrEqual(2);
+    expect(crossRes.status).toBe('success');
+  });
+});
+

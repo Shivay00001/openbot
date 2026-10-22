@@ -39,6 +39,11 @@ OpenBot is an open-source autonomous agent system engineered to unify physical d
 - vFlow parses natural voice commands (wake word, intent, slots) and executes them through the phone/browser/desktop engines, reporting each step's real outcome.
 - Outbound phone calls are placed through Twilio when `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_PHONE_NUMBER` are configured; without a provider the call API returns an explicit "not configured" error — calls are never simulated.
 
+### 🌐 6. Autonomous Edge Servers (Laptop & Phone Server Architecture)
+- **Laptop Edge Server (`:4002`)**: Turns any PC/Laptop into a remote-controllable autonomous node with native Win32/X11 mouse dynamics, smooth cubic Bézier curves, randomized human typing cadence, and high-DPI screen perception.
+- **Phone Edge Server (`:8765`)**: Turns Android phones into independent autonomous servers running an embedded Ktor/NanoHTTPD daemon backed by an Accessibility Service (rootless gesture dispatch & UI hierarchy parsing) with automatic ADB fallback.
+- **Master Device Orchestrator**: Coordinates perception, reasoning, action, and verification loops across devices, enabling seamless cross-device workflows (e.g., reading OTP from phone and typing it into laptop checkout screens).
+
 ---
 
 ## 🏗️ Repository Architecture
@@ -98,7 +103,6 @@ skill replay):
 cd packages/core
 npm test
 ```
-
 ---
 
 ## 🐳 Docker Deployment

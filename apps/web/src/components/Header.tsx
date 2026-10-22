@@ -11,6 +11,7 @@ import {
   PhoneCall, 
   Key,
   ShieldCheck,
+  Server,
 } from 'lucide-react';
 import type { AppMode } from '../lib/state';
 
@@ -31,6 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const navItems: Array<{ id: AppMode; label: string; icon: React.ReactNode; badge?: string }> = [
     { id: 'chat', label: 'Chat Agent', icon: <Bot size={17} /> },
+    { id: 'edge-nodes', label: 'Edge Servers', icon: <Server size={17} />, badge: 'LIVE' },
     { id: 'phone', label: 'Agentic Phone', icon: <Smartphone size={17} />, badge: 'USP' },
     { id: 'desktop', label: 'Own Computer', icon: <Monitor size={17} /> },
     { id: 'browser', label: 'Browser Agent', icon: <Globe size={17} /> },
