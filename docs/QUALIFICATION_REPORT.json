@@ -12,22 +12,23 @@
         "authRequired": true,
         "screenWidth": 1920,
         "screenHeight": 1080,
-        "timestamp": 1792705921694
+        "timestamp": 1792772015387
       },
       "move": {
         "success": true,
         "action": "move",
         "x": 960,
-        "y": 540
+        "y": 540,
+        "smooth": true
       }
     }
   },
   "2_Pollinations_API": {
     "status": "QUALIFIED",
-    "details": "Live $0 token generation confirmed (10338ms)",
+    "details": "Live $0 token generation confirmed (13455ms)",
     "data": {
-      "output": "Hi",
-      "latencyMs": 10338
+      "output": "Hi.",
+      "latencyMs": 13455
     }
   },
   "2_Web2API_DuckChat": {

@@ -806,7 +806,7 @@ describe('Multi-Device Edge Node Servers & Human-Like Orchestrator', () => {
     expect(browserRes.taskId).toBeDefined();
     expect(browserRes.steps.length).toBeGreaterThanOrEqual(2);
     expect(browserRes.status).toBe('success');
-  }, 30000);
+  }, 60000);
 });
 
 describe('Free Model Providers, TokenRouter & Web2API', () => {

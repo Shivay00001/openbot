@@ -28,6 +28,7 @@ using System.Threading;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.Windows.Forms;
 
 namespace OpenBot.LaptopEdge {
@@ -78,6 +79,28 @@ namespace OpenBot.LaptopEdge {
                     break;
                 }
             }
+        }
+
+        private static void MoveMouseBezier(int targetX, int targetY) {
+            Point current = Cursor.Position;
+            int startX = current.X;
+            int startY = current.Y;
+            int steps = 15;
+
+            // Simple cubic curve control point
+            int midX = (startX + targetX) / 2;
+            int midY = Math.Min(startY, targetY) - 20;
+
+            for (int i = 1; i <= steps; i++) {
+                float t = (float)i / steps;
+                float u = 1.0f - t;
+                // Quadratic Bezier interpolation: B(t) = (1-t)^2 * P0 + 2(1-t)t * P1 + t^2 * P2
+                int curX = (int)(u * u * startX + 2 * u * t * midX + t * t * targetX);
+                int curY = (int)(u * u * startY + 2 * u * t * midY + t * t * targetY);
+                SetCursorPos(curX, curY);
+                Thread.Sleep(5);
+            }
+            SetCursorPos(targetX, targetY);
         }
 
         private static void HandleClient(TcpClient client) {
@@ -141,14 +164,36 @@ namespace OpenBot.LaptopEdge {
                 } else if (path == "/screen/info") {
                     var b = Screen.PrimaryScreen.Bounds;
                     SendResponse(stream, 200, "{\"width\":" + b.Width + ",\"height\":" + b.Height + ",\"primary\":true,\"dpiAware\":true}");
+                } else if (path == "/screen/capture") {
+                    try {
+                        var b = Screen.PrimaryScreen.Bounds;
+                        using (var bmp = new Bitmap(b.Width, b.Height)) {
+                            using (var g = Graphics.FromImage(bmp)) {
+                                g.CopyFromScreen(Point.Empty, Point.Empty, b.Size);
+                            }
+                            using (var ms = new MemoryStream()) {
+                                bmp.Save(ms, ImageFormat.Png);
+                                string b64 = Convert.ToBase64String(ms.ToArray());
+                                SendResponse(stream, 200, "{\"success\":true,\"mimeType\":\"image/png\",\"screenshot\":\"data:image/png;base64," + b64 + "\"}");
+                            }
+                        }
+                    } catch (Exception ex) {
+                        SendResponse(stream, 500, "{\"success\":false,\"error\":\"" + ex.Message.Replace("\"", "'") + "\"}");
+                    }
                 } else if (path == "/action/mouse/move") {
                     double xf = ExtractDouble(body, "x", 0);
                     double yf = ExtractDouble(body, "y", 0);
+                    bool smooth = body.Contains("\"smooth\":true") || !body.Contains("\"smooth\":false");
                     var b = Screen.PrimaryScreen.Bounds;
                     int x = (xf > 0 && xf <= 1.0) ? (int)Math.Round(xf * b.Width) : (int)xf;
                     int y = (yf > 0 && yf <= 1.0) ? (int)Math.Round(yf * b.Height) : (int)yf;
-                    SetCursorPos(x, y);
-                    SendResponse(stream, 200, "{\"success\":true,\"action\":\"move\",\"x\":" + x + ",\"y\":" + y + "}");
+                    
+                    if (smooth) {
+                        MoveMouseBezier(x, y);
+                    } else {
+                        SetCursorPos(x, y);
+                    }
+                    SendResponse(stream, 200, "{\"success\":true,\"action\":\"move\",\"x\":" + x + ",\"y\":" + y + ",\"smooth\":" + (smooth ? "true" : "false") + "}");
                 } else if (path == "/action/mouse/click") {
                     double xf = ExtractDouble(body, "x", -1);
                     double yf = ExtractDouble(body, "y", -1);
@@ -156,7 +201,7 @@ namespace OpenBot.LaptopEdge {
                         var b = Screen.PrimaryScreen.Bounds;
                         int x = (xf > 0 && xf <= 1.0) ? (int)Math.Round(xf * b.Width) : (int)xf;
                         int y = (yf > 0 && yf <= 1.0) ? (int)Math.Round(yf * b.Height) : (int)yf;
-                        SetCursorPos(x, y);
+                        MoveMouseBezier(x, y);
                     }
                     mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
                     Thread.Sleep(50);
@@ -220,6 +265,11 @@ namespace OpenBot.LaptopEdge {
 $SourceFile = Join-Path $OutputDir "OpenBotLaptopEdge.cs"
 Set-Content -Path $SourceFile -Value $CSharpCode -Encoding UTF8
 
+# Remove previous binary to ensure we verify a genuine new build
+if (Test-Path $ExeTarget) {
+    Remove-Item -Path $ExeTarget -Force -ErrorAction SilentlyContinue
+}
+
 # Find Windows built-in C# compiler (csc.exe)
 $CscPath = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 if (!(Test-Path $CscPath)) {
@@ -229,13 +279,22 @@ if (!(Test-Path $CscPath)) {
 if (Test-Path $CscPath) {
     Write-Host "[1/2] Compiling standalone Win32 OpenBot-Laptop-Edge.exe using .NET csc..." -ForegroundColor Yellow
     & $CscPath /target:winexe /out:"$ExeTarget" /r:System.Windows.Forms.dll /r:System.Drawing.dll "$SourceFile"
-    if (Test-Path $ExeTarget) {
-        Write-Host "[2/2] [SUCCESS] Standalone EXE compiled successfully!" -ForegroundColor Green
-        Write-Host "File: $ExeTarget" -ForegroundColor Cyan
-        Remove-Item $SourceFile -ErrorAction SilentlyContinue
-        exit 0
+    if ($LASTEXITCODE -ne 0 -or !(Test-Path $ExeTarget)) {
+        Write-Error "[FAIL] C# compilation failed with exit code $LASTEXITCODE"
+        exit 1
     }
+    Write-Host "[2/2] [SUCCESS] Standalone EXE compiled successfully!" -ForegroundColor Green
+    Write-Host "File: $ExeTarget" -ForegroundColor Cyan
+    Remove-Item $SourceFile -ErrorAction SilentlyContinue
+
+    # Sync to web app downloads directory
+    $WebDownloads = Join-Path $RootDir "apps\web\public\downloads"
+    if (Test-Path $WebDownloads) {
+        Copy-Item -Path $ExeTarget -Destination (Join-Path $WebDownloads "OpenBot-Laptop-Edge.exe") -Force
+        Write-Host "[SYNC] Copied to public download directory: $WebDownloads" -ForegroundColor Green
+    }
+    exit 0
 }
 
-Write-Host "[WARN] csc.exe not found. Creating executable bootstrap launcher..." -ForegroundColor Yellow
-exit 0
+Write-Error "[FAIL] csc.exe not found on system."
+exit 1
