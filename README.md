@@ -157,6 +157,12 @@ OpenBot is architected around the principle of user sovereignty:
 
 ---
 
+## 🏢 Built by VisionQuantech
+
+OpenBot is developed by [VisionQuantech](https://visionquantech.com) — an AI research lab that ships production AI automation for small businesses: [AI automation services](https://visionquantech.com/ai-automation-services) and [AI agents for business](https://visionquantech.com/agents).
+
+---
+
 ## 📜 License
 
 MIT License — see [LICENSE](LICENSE) for details.
